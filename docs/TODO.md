@@ -53,6 +53,12 @@
       they get no category and sink to tier 1. Then re-run `ingest categories --force`.
 - [x] 2026-10-17 taxonomy-first retrieval (docs/SEARCH.md): tiles and type queries retrieve by category, text only as
       fallback; category bonus in relevance; note-lines ("for use with…") can no longer be titles.
+- [~] 2026-10-31 `georges catalogs info` (`internal/catinfo`, migration 00040 `family_facts`): catalog pages → typed
+      facts (spout height/reach, W×H×D, centers, flow gpm/gpf, mounting, holes, handles, material, certifications,
+      cartridge, drain, door-hardware function/handing, designer, works-with), collection (printed TOC > page heading),
+      feature bullets, printed finishes → products.finish. Site attributes win; catalog families get all keys.
+      Next: per-type facet filters from family_facts; Ashley Norton/Emtek column tables (CTC/length/projection);
+      Gessi/BWC finish-group legends; spec-sheet (`documents.text`) facts for site families.
 - [ ] Synthesized display names (brand + collection + mounting + type + finish) for junk-titled catalog families;
       `query_type_lexicon` confidence table; per-type facet sets; golden query set (docs/SEARCH.md 2, 6, 9, 10).
 - [ ] Weighted tsvector (title+finish A, type B, spec D) with `ts_rank_cd`; see docs/PACKAGES.md 2026-10-17.
