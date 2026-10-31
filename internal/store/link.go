@@ -175,10 +175,10 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    -- never stands for a faucet, a tub never for a sink (migration 00029); the probe is ~89%
 		    -- precise at 0.7 on the labelled set
 		    AND (cc.vsubject IS NULL OR COALESCE(cc.vsubscore,0) < 0.7 OR subject_fits(cc.vsubject, pf.category_path))
-		    -- a swatch, a logo, a person, a mood board: the model needs only mild confidence to
-		    -- keep these off a card (an audit of 15k cards found it right at 0.4 / 0.5)
-		    AND NOT (cc.vkind IN ('text','other') AND COALESCE(cc.vscore,0) >= 0.4)
-		    AND NOT (cc.vsubject = 'other' AND COALESCE(cc.vsubscore,0) >= 0.5)
+		    -- a swatch, a logo, a person, a mood board: refused when the model is confident. At
+		    -- milder scores (text/other 0.4, subject other 0.5) a 40-card audit found it wrong
+		    -- half the time (Duravit vanities, Gessi spouts and flush plates read as "other")
+		    AND NOT (cc.vkind IN ('text','other') AND COALESCE(cc.vscore,0) >= 0.6)
 		    -- a detail shot or icon is never the card photo: a product crop on a 1700×2200 page is at
 		    -- least ~150 px on its long side and ~80 px on its short side (a tidied tall faucet is 108×177)
 		    AND ((cc.kind <> 'photo' AND (cc.vkind IS DISTINCT FROM 'photo' OR COALESCE(cc.quality,0) < 0.2)) OR (GREATEST(cc.w,cc.h) >= 150 AND LEAST(cc.w,cc.h) >= 80 AND cc.w*cc.h >= 12000))
@@ -208,7 +208,6 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		  WHERE i.source='spec' AND i.path IS NOT NULL AND i.vkind='photo' AND COALESCE(i.vscore,0) >= 0.8
 		    AND COALESCE(i.width,0) >= 300 AND COALESCE(i.height,0) >= 200
 		    AND (i.vsubject IS NULL OR COALESCE(i.vsubscore,0) < 0.7 OR subject_fits(i.vsubject, pf.category_path))
-		    AND NOT (i.vsubject = 'other' AND COALESCE(i.vsubscore,0) >= 0.5)
 		  ORDER BY i.family_id, i.vscore DESC, i.width*i.height DESC
 		)
 		UPDATE family_best fb SET photo_path=spec.path, photo_w=spec.width, photo_how='spec', updated_at=now()
@@ -248,7 +247,6 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		  FROM catalog_crops cc
 		  WHERE (cc.kind='photo' OR (cc.vkind='photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2)) AND cc.w >= 300 AND cc.h >= 200
 		    AND (cc.vkind IS NULL OR cc.vkind = 'photo')
-		    AND NOT (cc.vsubject = 'other' AND COALESCE(cc.vsubscore,0) >= 0.5)
 		    AND (SELECT count(*) FROM catalog_crops o WHERE o.catalog_id=cc.catalog_id AND o.page=cc.page AND o.kind='photo') <= 2
 		), pick AS (
 		  SELECT DISTINCT ON (pl.family_id) pl.family_id, o.path, o.w
