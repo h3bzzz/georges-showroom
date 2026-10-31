@@ -305,11 +305,6 @@ templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, i
 							}
 						</div>
 					}
-				} else if len(pages) > 0 {
-					<a href={ templ.SafeURL("/catalog/" + Itoa(pages[0].CatalogID) + "?p=" + Itoa(pages[0].Page)) } class="block rounded-lg bg-white overflow-hidden" style="border:1px solid var(--line)">
-						<img src={ "/catalog/" + Itoa(pages[0].CatalogID) + "/page/" + Itoa(pages[0].Page) } alt="" class="w-full object-cover" style="aspect-ratio:1/1;object-position:top"/>
-					</a>
-					<div class="text-xs mt-2" style="color:var(--nickel)">Shown in { pages[0].BrandCode } · { pages[0].Title }, page { Itoa(pages[0].Page) }. Product photo extraction is still running for this book.</div>
 				} else {
 					<div class="aspect-square rounded-lg" style="border:1px solid var(--line)"><div class="placeholder"><img src="/static/icon-64.png" alt=""/><span>{ f.ProductType }</span></div></div>
 				}
