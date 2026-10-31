@@ -25,12 +25,13 @@ const MinSample = 12
 // ÷MinRatioLow below it (a book of near-identical prices must still admit its accessories and
 // its showpieces) and never wider than ×MaxRatio (a genuine brand runs from a $30 aerator to a
 // $6,000 tub filler, well inside 50× of its median either way; a SKU or an index reference read
-// as money is not). The low side is wider because OCR errs high far more often than low (a
-// dropped decimal point is ×100) and because a $400-median plumbing brand sells $12 aerators,
-// spindles and gaskets (Chicago Faucets, Classic Brass).
+// as money is not). ×40 is wide: the gross OCR errors (a dropped decimal point is ×100, an
+// index reference is ×1000) are caught by ocr.linePrice and the hard bounds before the fence,
+// and a $400-median plumbing brand really sells $12 aerators and $1,600 appliance pulls
+// (Chicago Faucets, Classic Brass, Ashley Norton).
 const (
 	K           = 3.5
-	MinRatio    = 20.0 // a hardware book: $40 knobs and $750 pull pairs are both genuine
+	MinRatio    = 40.0 // a hardware book: $45 knobs and $1,600 appliance pulls are both genuine (Ashley Norton)
 	MinRatioLow = 40.0
 	MaxRatio    = 50.0
 )

@@ -24,8 +24,14 @@ type Line struct {
 // Prices are read with pricing.ParseCents (a dollar sign or a cents part is required) and never
 // from an index page, whose "Model No. Page" columns otherwise read as money.
 func Lines(words []Word) []Line {
+	return LinesCents(words, false)
+}
+
+// LinesCents is Lines with a hint that the book as a whole prints prices with cents (see
+// CentsCounts): a page where OCR mangled most of the points is then still read as cents.
+func LinesCents(words []Word, bookCents bool) []Line {
 	index := IsIndexPage(words)
-	cents := centsStyle(words)
+	cents := bookCents || centsStyle(words)
 	ws := make([]Word, 0, len(words))
 	for _, w := range words {
 		if strings.TrimSpace(w.Text) != "" && w.H > 0 {
@@ -222,7 +228,14 @@ var reCentsTok = regexp.MustCompile(`^\$?\s?\d{1,3}(,\d{3})*\.\d{2}$`)
 // whole dollars only (hundreds of them to no cents at all), and there "$1492" is $1,492, not
 // $14.92.
 func centsStyle(words []Word) bool {
-	withCents, whole := 0, 0
+	withCents, whole := CentsCounts(words)
+	return withCents >= 3 && 2*withCents >= whole
+}
+
+// CentsCounts counts the money tokens printed with cents and the signed whole-dollar ones, so
+// a caller holding every page of a book can decide its style once (a book with hundreds of
+// "$129.95"s is a cents book on every page, however badly one page OCR'd).
+func CentsCounts(words []Word) (withCents, whole int) {
 	for i, w := range words {
 		t := strings.Trim(w.Text, "*†‡,;:")
 		if i > 0 && strings.TrimSpace(words[i-1].Text) == "$" {
@@ -235,7 +248,7 @@ func centsStyle(words []Word) bool {
 			whole++
 		}
 	}
-	return withCents >= 3 && 2*withCents >= whole
+	return withCents, whole
 }
 
 // IsIndexPage recognises a numerical / alphabetical index or cross-reference page: the word

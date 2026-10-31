@@ -37,6 +37,7 @@ func catalogsItemsCmd() *cobra.Command {
 			}
 			var pages []pw
 			canons := map[int]*ocr.Canon{}
+			withCents, whole := map[int]int{}, map[int]int{}
 			for _, p := range refs {
 				path := pageImagePath(cfg.DataDir, p)
 				b, err := os.ReadFile(strings.TrimSuffix(path, ".jpg") + ".words.json")
@@ -51,12 +52,18 @@ func catalogsItemsCmd() *cobra.Command {
 					canons[p.CatalogID] = ocr.NewCanon()
 				}
 				canons[p.CatalogID].Add(p.Page, words)
+				c, h := ocr.CentsCounts(words)
+				withCents[p.CatalogID] += c
+				whole[p.CatalogID] += h
 				pages = append(pages, pw{p, words})
 			}
 			for _, pg := range pages {
 				p, words, canon := pg.ref, pg.words, canons[pg.ref.CatalogID]
+				// a book that prints cents everywhere (Alno, Chicago Faucets) is read as cents on
+				// every page, even one where OCR dropped most of the points
+				bookCents := withCents[p.CatalogID] >= 20 && 2*withCents[p.CatalogID] >= whole[p.CatalogID]
 				var rows []store.ItemRow
-				for _, ln := range ocr.Lines(words) {
+				for _, ln := range ocr.LinesCents(words, bookCents) {
 					for _, k := range ln.SKUs {
 						sku, ok := canon.Resolve(p.Page, k)
 						if !ok || ocr.JunkSKU(sku) {

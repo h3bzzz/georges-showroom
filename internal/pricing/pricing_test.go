@@ -69,8 +69,8 @@ func TestFence(t *testing.T) {
 		flatVals[i] = 50000
 	}
 	flat := NewFence(flatVals)
-	if !flat.Plausible(1300) || !flat.Plausible(990000) || flat.Plausible(1100000) || flat.Plausible(1200) {
-		t.Errorf("flat book should fence ×20 above and ÷40 below the median: %+v", flat)
+	if !flat.Plausible(1300) || !flat.Plausible(1990000) || flat.Plausible(2100000) || flat.Plausible(1200) {
+		t.Errorf("flat book should fence ×40 around the median: %+v", flat)
 	}
 }
 

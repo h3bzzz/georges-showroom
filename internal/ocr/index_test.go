@@ -100,6 +100,14 @@ func TestIsIndexPage(t *testing.T) {
 			t.Errorf("Alno page: A7420-30 read %d, want 30495", ln.PriceCents)
 		}
 	}
+	// a page of a cents book where OCR dropped every point still reads as cents with the book hint
+	lost := []Word{{Text: "A6726-24", X: 10, Y: 10, W: 60, H: 12}, {Text: "Towel", X: 100, Y: 10, W: 50, H: 12}, {Text: "Rack", X: 160, Y: 10, W: 50, H: 12}, {Text: "$64495", X: 300, Y: 10, W: 40, H: 12}}
+	if ln := LinesCents(lost, true); len(ln) != 1 || ln[0].PriceCents != 64495 {
+		t.Errorf("book hint: %+v", ln)
+	}
+	if ln := Lines(lost); len(ln) != 1 || ln[0].PriceCents != 6449500 {
+		t.Errorf("no hint: %+v", ln)
+	}
 	// the same amount on a whole-dollar page (Emtek) is whole dollars
 	whole := []Word{{Text: "451211", X: 10, Y: 10, W: 60, H: 12}, {Text: "Single", X: 100, Y: 10, W: 50, H: 12}, {Text: "Cylinder", X: 160, Y: 10, W: 50, H: 12}, {Text: "$1492", X: 300, Y: 10, W: 50, H: 12},
 		{Text: "451332", X: 10, Y: 30, W: 60, H: 12}, {Text: "Dummy", X: 100, Y: 30, W: 50, H: 12}, {Text: "$878", X: 300, Y: 30, W: 50, H: 12}}
