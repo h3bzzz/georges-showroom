@@ -21,6 +21,8 @@ var junkSKU = []*regexp.Regexp{
 	regexp.MustCompile(`^\d{4}K(/\d{4}K)?$`),
 	regexp.MustCompile(`^KELVIN/`),
 	regexp.MustCompile(`^\d+V/\d+HZ$`),
+	// a phone number (Robern's 800-877-2376 became a $97 product)
+	regexp.MustCompile(`^1?-?\d{3}-\d{3}-\d{4}$`),
 	// a word and a number joined by a slash is a label, not a model: AMPS/0.75, MODEL/COLOR1, W/6701 ("with 6701")
 	regexp.MustCompile(`^[A-Z]{1,6}/[\d.]+$`),
 	regexp.MustCompile(`^MODEL/`),

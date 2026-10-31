@@ -88,6 +88,18 @@ func TestIsIndexPage(t *testing.T) {
 			t.Errorf("cents-style page: %s read %d, want %d (%s)", ln.SKUs[0].Text, ln.PriceCents, w, ln.Text)
 		}
 	}
+	// an Alno page: as many points dropped as kept, still a cents page
+	var alno []Word
+	for i := 0; i < 3; i++ {
+		y := 100 + i*20
+		alno = append(alno, Word{Text: "A6684", X: 10, Y: y, W: 60, H: 12}, Word{Text: "Double", X: 100, Y: y, W: 50, H: 12}, Word{Text: "Hook", X: 160, Y: y, W: 50, H: 12}, Word{Text: "$19.95", X: 300, Y: y, W: 40, H: 12}, Word{Text: "$12995", X: 350, Y: y, W: 40, H: 12}, Word{Text: "$144.95", X: 400, Y: y, W: 40, H: 12}, Word{Text: "$18500", X: 450, Y: y, W: 40, H: 12})
+	}
+	alno = append(alno, Word{Text: "A7420-30", X: 10, Y: 200, W: 60, H: 12}, Word{Text: "Towel", X: 100, Y: 200, W: 50, H: 12}, Word{Text: "Bar", X: 160, Y: 200, W: 50, H: 12}, Word{Text: "$30495", X: 300, Y: 200, W: 40, H: 12})
+	for _, ln := range Lines(alno) {
+		if ln.SKUs[0].Text == "A7420-30" && ln.PriceCents != 30495 {
+			t.Errorf("Alno page: A7420-30 read %d, want 30495", ln.PriceCents)
+		}
+	}
 	// the same amount on a whole-dollar page (Emtek) is whole dollars
 	whole := []Word{{Text: "451211", X: 10, Y: 10, W: 60, H: 12}, {Text: "Single", X: 100, Y: 10, W: 50, H: 12}, {Text: "Cylinder", X: 160, Y: 10, W: 50, H: 12}, {Text: "$1492", X: 300, Y: 10, W: 50, H: 12},
 		{Text: "451332", X: 10, Y: 30, W: 60, H: 12}, {Text: "Dummy", X: 100, Y: 30, W: 50, H: 12}, {Text: "$878", X: 300, Y: 30, W: 50, H: 12}}
@@ -102,6 +114,12 @@ func TestIsIndexPage(t *testing.T) {
 				t.Errorf("parenthesised finish code taken as a SKU: %+v", ln)
 			}
 		}
+	}
+	// Lacava: "SINK - 5260" names a four-digit model that is otherwise indistinguishable from a page number
+	lav := []Word{{Text: "SINK", X: 10, Y: 10, W: 40, H: 12}, {Text: "-", X: 55, Y: 10, W: 5, H: 12}, {Text: "5260", X: 65, Y: 10, W: 40, H: 12}, {Text: "WHITE", X: 120, Y: 10, W: 40, H: 12}, {Text: "$1,990", X: 300, Y: 10, W: 40, H: 12},
+		{Text: "see", X: 10, Y: 30, W: 40, H: 12}, {Text: "page", X: 55, Y: 30, W: 5, H: 12}, {Text: "-", X: 100, Y: 30, W: 5, H: 12}, {Text: "5261", X: 110, Y: 30, W: 40, H: 12}}
+	if ln := Lines(lav); len(ln) != 1 || ln[0].SKUs[0].Text != "5260" || ln[0].PriceCents != 199000 {
+		t.Errorf("labelled numeric model: %+v", ln)
 	}
 	// a SKU that is all digits is never the price, and page references are not money
 	row := []Word{{Text: "20099", X: 10, Y: 10, W: 40, H: 12}, {Text: "46189_73628", X: 60, Y: 10, W: 80, H: 12}, {Text: "DIAMANTATO", X: 150, Y: 10, W: 80, H: 12}}

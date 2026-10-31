@@ -77,14 +77,15 @@ func (s *Store) AuditPrices(ctx context.Context, brandCode string) ([]PriceOutli
 	var out []PriceOutlier
 	for _, r := range all {
 		f := fences[r.brandID]
-		if f.Plausible(r.PriceCents) && r.PriceCents <= pricing.TierMax(r.tier) {
+		tierMax := pricing.TierMaxFor(r.tier, f.Median)
+		if f.Plausible(r.PriceCents) && r.PriceCents <= tierMax {
 			continue
 		}
 		o := r.PriceOutlier
 		o.Lo, o.Hi, o.Median = f.Lo, f.Hi, f.Median
 		switch {
-		case r.PriceCents > pricing.TierMax(r.tier) && f.Plausible(r.PriceCents):
-			o.Reason = fmt.Sprintf("above tier-%d maximum %s", r.tier, moneyShort(pricing.TierMax(r.tier)))
+		case r.PriceCents > tierMax && f.Plausible(r.PriceCents):
+			o.Reason = fmt.Sprintf("above tier-%d maximum %s", r.tier, moneyShort(tierMax))
 		case r.PriceCents > pricing.MaxCents:
 			o.Reason = "above hard maximum"
 		case r.PriceCents < pricing.MinCents:

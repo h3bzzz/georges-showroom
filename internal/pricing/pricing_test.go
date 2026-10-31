@@ -69,7 +69,13 @@ func TestFence(t *testing.T) {
 		flatVals[i] = 50000
 	}
 	flat := NewFence(flatVals)
-	if !flat.Plausible(2600) || !flat.Plausible(990000) || flat.Plausible(1100000) || flat.Plausible(2400) {
-		t.Errorf("flat book should fence ×20 around the median: %+v", flat)
+	if !flat.Plausible(1300) || !flat.Plausible(990000) || flat.Plausible(1100000) || flat.Plausible(1200) {
+		t.Errorf("flat book should fence ×20 above and ÷40 below the median: %+v", flat)
+	}
+}
+
+func TestTierMaxFor(t *testing.T) {
+	if TierMaxFor(2, 40000) != 750_000 || TierMaxFor(2, 200000) != 2_000_000 || TierMaxFor(1, 200000) != 4_000_000 || TierMaxFor(0, 200000) != MaxCents {
+		t.Errorf("tier caps: %d %d %d", TierMaxFor(2, 40000), TierMaxFor(2, 200000), TierMaxFor(1, 200000))
 	}
 }

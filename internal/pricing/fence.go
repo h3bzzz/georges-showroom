@@ -21,14 +21,18 @@ type Fence struct {
 const MinSample = 12
 
 // K is the fence width in scaled MADs (1.4826 turns a MAD into a standard deviation for normal
-// data). The width is then clamped: never tighter than ×MinRatio around the median (a book of
-// near-identical prices must still admit its accessories and its showpieces) and never wider
-// than ×MaxRatio (a genuine brand runs from a $30 aerator to a $6,000 tub filler, well inside
-// 50× of its median either way; a SKU or an index reference read as money is not).
+// data). The width is then clamped: never tighter than ×MinRatio above the median and
+// ÷MinRatioLow below it (a book of near-identical prices must still admit its accessories and
+// its showpieces) and never wider than ×MaxRatio (a genuine brand runs from a $30 aerator to a
+// $6,000 tub filler, well inside 50× of its median either way; a SKU or an index reference read
+// as money is not). The low side is wider because OCR errs high far more often than low (a
+// dropped decimal point is ×100) and because a $400-median plumbing brand sells $12 aerators,
+// spindles and gaskets (Chicago Faucets, Classic Brass).
 const (
-	K        = 3.5
-	MinRatio = 20.0 // a hardware book: $40 knobs and $750 pull pairs are both genuine
-	MaxRatio = 50.0
+	K           = 3.5
+	MinRatio    = 20.0 // a hardware book: $40 knobs and $750 pull pairs are both genuine
+	MinRatioLow = 40.0
+	MaxRatio    = 50.0
 )
 
 // NewFence builds the fence for cents values; zeros and negatives are ignored.
@@ -54,7 +58,8 @@ func NewFence(cents []int64) Fence {
 	sort.Float64s(dev)
 	f.LogMAD = median(dev)
 	spread := math.Min(math.Max(1.4826*f.LogMAD*K, math.Log(MinRatio)), math.Log(MaxRatio))
-	lo := int64(math.Round(math.Exp(f.LogMed - spread)))
+	spreadLo := math.Min(math.Max(1.4826*f.LogMAD*K, math.Log(MinRatioLow)), math.Log(MaxRatio))
+	lo := int64(math.Round(math.Exp(f.LogMed - spreadLo)))
 	hi := int64(math.Round(math.Exp(f.LogMed + spread)))
 	if lo > MinCents {
 		f.Lo = lo
@@ -86,11 +91,19 @@ func median(sorted []float64) float64 {
 // parts / rough-ins / cartridges (2) $7,500. A $61,000 riser pipe passes a brand fence but not
 // this.
 func TierMax(tier int) int64 {
+	return TierMaxFor(tier, 0)
+}
+
+// TierMaxFor scales TierMax to the brand: in a brand whose median list price is high the parts
+// tier admits ten times that median (Barber Wilsons' $12,000 bath mixers sit in "Bathtub
+// Parts", Hydro Systems' $14,000 whirlpool combos under an unread title) and the unread tier
+// twenty times, never less than the flat caps.
+func TierMaxFor(tier int, median int64) int64 {
 	switch tier {
 	case 2:
-		return 750_000
+		return max(750_000, 10*median)
 	case 1:
-		return 3_000_000
+		return max(3_000_000, 20*median)
 	}
 	return MaxCents
 }

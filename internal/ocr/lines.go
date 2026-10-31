@@ -64,13 +64,12 @@ func Lines(words []Word) []Line {
 		sort.Slice(r, func(i, j int) bool { return r[i].X < r[j].X })
 		var parts []string
 		ln := Line{X: r[0].X, Y: r[0].Y}
-		for _, w := range r {
+		for i, w := range r {
 			parts = append(parts, w.Text)
 			// shaky or shape-only reads are kept for Canon.Resolve to repair or drop; a money token
-			// ("610.00") is SKU-shaped too but is never a SKU
-			// a token in parentheses is a finish code or a cross-reference ("(US10B)", "(85354),"),
-			// never the line's own model
-			if !pricing.LooksLikeMoney(w.Text) && !IsReference(w.Text) && (LooksLikeSKU(w.Text) || skuShaped(w.Text)) {
+			// ("610.00") is SKU-shaped too but is never a SKU; a token in parentheses is a finish
+			// code or a cross-reference ("(US10B)", "(85354),"), never the line's own model
+			if !pricing.LooksLikeMoney(w.Text) && !IsReference(w.Text) && (LooksLikeSKU(w.Text) || skuShaped(w.Text) || labelledModel(r, i)) {
 				ln.SKUs = append(ln.SKUs, w)
 			}
 		}
@@ -169,6 +168,27 @@ func linePrice(row []Word, skus []Word, cents bool) int64 {
 	return c
 }
 
+// labelledModel accepts a short all-digit model that LooksLikeSKU would take for a page number
+// when the row names the product and separates the two with a dash: Lacava prints
+// "SINK - 5260", "SINKTOP - 5240". The word before the dash must be a product word in capitals.
+func labelledModel(row []Word, i int) bool {
+	t := strings.Trim(row[i].Text, ",;:")
+	if len(t) < 4 || len(t) > 5 || i < 2 {
+		return false
+	}
+	for _, c := range t {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	dash := strings.TrimSpace(row[i-1].Text)
+	if dash != "-" && dash != "–" && dash != "—" {
+		return false
+	}
+	label := strings.Trim(row[i-2].Text, ",;:")
+	return len(label) >= 3 && label == strings.ToUpper(label) && isAlphaWord(label)
+}
+
 // reDroppedPoint: a dollar amount of four to seven digits with no decimal point, commas allowed
 // where they may have survived ("$22800", "$4,93500", "$170700")
 var reDroppedPoint = regexp.MustCompile(`^\$\s?(\d[\d,]{2,7}\d)$`)
@@ -197,8 +217,10 @@ func droppedPoint(tok string) (int64, bool) {
 var reCentsTok = regexp.MustCompile(`^\$?\s?\d{1,3}(,\d{3})*\.\d{2}$`)
 
 // centsStyle reports whether a page prints its prices with cents: at least three such tokens,
-// outnumbering the signed whole-dollar amounts ("$704", "$1,011") two to one. Emtek and Baldwin
-// pages print whole dollars only, and there "$1492" is $1,492, not $14.92.
+// and at least half as many as the signed whole-dollar amounts ("$704", "$1,011"); on an Alno
+// page more than half the "$129.95"s come back as "$12995". Emtek and Baldwin pages print
+// whole dollars only (hundreds of them to no cents at all), and there "$1492" is $1,492, not
+// $14.92.
 func centsStyle(words []Word) bool {
 	withCents, whole := 0, 0
 	for i, w := range words {
@@ -213,7 +235,7 @@ func centsStyle(words []Word) bool {
 			whole++
 		}
 	}
-	return withCents >= 3 && withCents >= 2*whole
+	return withCents >= 3 && 2*withCents >= whole
 }
 
 // IsIndexPage recognises a numerical / alphabetical index or cross-reference page: the word
