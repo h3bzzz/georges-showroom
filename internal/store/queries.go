@@ -360,7 +360,7 @@ func (s *Store) ImagesForFamily(ctx context.Context, familyID int64) ([]string, 
 	rows, err := s.Pool.Query(ctx, `
 		SELECT u FROM (
 		  SELECT '/files/'||COALESCE(cc.hd_path,cc.path) AS u, 0 AS pri, (fc.how='exact') AS ex, cc.score AS sc, cc.w*cc.h AS ar
-		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id WHERE fc.family_id=$1 AND cc.kind='photo'
+		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id WHERE fc.family_id=$1 AND cc.kind='photo' AND cc.dup_of IS NULL
 		  UNION ALL
 		  SELECT '/files/'||i.path, 1, true, 1, 0 FROM product_images i WHERE i.family_id=$1 AND i.source='web' AND i.path IS NOT NULL
 		  UNION ALL
@@ -717,7 +717,7 @@ func (s *Store) LifestylePage(ctx context.Context, catalogID int) int {
 func (s *Store) DrawingsForFamily(ctx context.Context, familyID int64) ([]string, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT '/files/'||COALESCE(cc.hd_path,cc.path) FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id
-		WHERE fc.family_id=$1 AND cc.kind='drawing' ORDER BY (fc.how='exact') DESC, cc.w*cc.h DESC LIMIT 6`, familyID)
+		WHERE fc.family_id=$1 AND cc.kind='drawing' AND cc.dup_of IS NULL ORDER BY (fc.how='exact') DESC, cc.w*cc.h DESC LIMIT 6`, familyID)
 	if err != nil {
 		return nil, err
 	}

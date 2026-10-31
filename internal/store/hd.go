@@ -31,7 +31,7 @@ func (s *Store) CropsNeedingHD(ctx context.Context, brandCode string, maxW, limi
 		SELECT cc.id, cc.path, cc.w, cc.h, c.brand_code, c.name, cc.page, cc.x, cc.y
 		FROM catalog_crops cc JOIN catalogs c ON c.id=cc.catalog_id
 		LEFT JOIN shown s ON s.path=cc.path
-		WHERE cc.hd_w IS NULL AND cc.w < $1 AND cc.w >= 40 AND cc.h >= 40
+		WHERE cc.hd_w IS NULL AND cc.dup_of IS NULL AND cc.w < $1 AND cc.w >= 40 AND cc.h >= 40
 		  AND ($2 = '' OR c.brand_code = $2)
 		  AND ($3 OR s.path IS NOT NULL)
 		ORDER BY (COALESCE(s.tier, 9) = 0) DESC, (s.photo IS TRUE) DESC,
