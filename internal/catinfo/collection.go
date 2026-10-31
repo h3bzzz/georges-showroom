@@ -37,7 +37,7 @@ var typeWords = map[string]bool{
 	"type": true, "color": true, "colour": true, "sku": true, "ref": true, "glass": true, "mirror": true, "mirrors": true, "lighting": true,
 	"vanity": true, "vanities": true, "console": true, "consoles": true, "washstand": true, "wood": true, "metal": true, "lavs": true, "lav": true,
 	"slide": true, "body": true, "tap": true, "taps": true, "pillar": true, "edge": true, "edges": true, "appliance": true, "cup": true,
-	"gooseneck": true, "hinges": true, "hinge": true, "soakers": true, "soaker": true, "supplies": true, "supply": true, "racks": true, "rack": true, "cylinder": true, "cylinders": true, "cartridge": true, "cartridges": true, "outlet": true, "outlets": true, "blaticiceid": true, "rods": true, "rod": true, "bolts": true, "bolt": true, "surface": true, "combinations": true,
+	"gooseneck": true, "hinges": true, "hinge": true, "towel": true, "towels": true, "caddies": true, "corners": true, "soakers": true, "soaker": true, "supplies": true, "supply": true, "racks": true, "rack": true, "cylinder": true, "cylinders": true, "cartridge": true, "cartridges": true, "outlet": true, "outlets": true, "blaticiceid": true, "rods": true, "rod": true, "bolts": true, "bolt": true, "surface": true, "combinations": true,
 	"combination": true, "selling": true, "best": true, "entrance": true, "tubular": true, "modifications": true, "modification": true, "specialty": true,
 	"handshowers": true, "handshower": true, "discontinued": true, "coming": true, "soon": true, "numerical": true, "listing": true, "builder": true,
 	"luxury": true, "platinum": true, "rosettes": true, "rosette": true, "raincan": true, "strainer": true, "basket": true, "pg": true, "plates": true,
