@@ -69,3 +69,62 @@
 - [ ] Embedding sidecar: onnxruntime_go + DINOv2-B → pgvector HNSW; photo-in → 5 nearest families.
 - [ ] Improve crop→SKU linking per brand (SKU patterns, multi-column layouts, finish tables); rank crops by size/quality.
 - [ ] Price file: parse columns → products table (blocked on FTP_PASS).
+
+## 2026-10-31 imaging + pricing accuracy pass (branch `imaging-pricing`)
+
+**Pricing gold set.** Site products carry both George's price and the maker's list, and their
+ratio is constant per brand: Emtek 0.80 (3,668 SKUs), Watermark/California Faucets/most 0.75,
+Baldwin/Newport/Icera 0.70, Top Knobs 0.90 → `brands.price_multiplier` is now that observed
+ratio (migration 00035; `ingest prices` refreshes it). Catalog-vs-site list prices (1,400
+SKU pairs over BAL/CAL/ETK, matched on finish-stripped SKUs) agree to within one price-book
+year: median ratio CAL 1.00, ETK 1.56 (2026 book vs 2024 site), BAL 1.36; no systematic
+parse error survived except Baldwin's "Boulder (85354) … $82" cross-reference lines.
+Systematic OCR errors found and fixed in `internal/ocr` (tests in index_test.go, sku_test.go):
+dropped decimal points on cents-style pages ("$22800", "$4,93500", "$12995" — Chicago,
+Aboutwater, Alno, Ashley Norton, Barber Wilsons; page- and book-level style detection),
+parenthesised finish codes/cross-references taken as SKUs ("(US10B)" became a $240 Emtek
+product, 415 lines), junk SKUs ("4.5L/MIN", "A112.1016/ASSE", "120Z", "2700K/4000K",
+phone numbers; `ocr.JunkSKU`, purged by `catalogs items`), Lacava "SINK - 5260" labelled
+models. Fence: ×40 around the brand median (was ×20; Ashley Norton's $1,600 pulls and
+Chicago's $12 aerators are real), parts cap = max($7,500, 10× brand median) (Barber
+Wilsons' $12,000 mixers sit in "Bathtub Parts"). Result after `catalogs items` +
+`ingest prices --reset`: catalog products priced 22,454 → 22,582, quarantined 322 → 28
+(Chicago 169 → 3, Alno 46 → 0, Classic Brass 22 → 4, Ashley Norton 22 → 0); 76 junk-SKU
+products removed. Remaining 28 flags are mostly genuine cheap parts under 1/40 of the median
+(Hydro Systems surcharges, Classic Brass spindles) and three Baldwin ×51 reads.
+
+**Imaging audit.** 353-family stratified sample of card photos (brand × photo_how) judged by
+eye: 26 wrong (7.4 %), of which 10 are Lacava finish-swatch tables and dimensioned vanity
+renders in a book that had no vision verdict yet, 4 are lifestyle/mood-board openers, 3 are
+dimensioned drawings, 2 a display board; excluding the unclassified Lacava crops 4.8 %.
+Rules changed in `RefreshFamilyBest`: a crop the model calls text/other at ≥ 0.6 is never a
+card; a series opener must read as a photograph; parts/rough-ins/drains (tier 2 or a parts
+category, `series_ok()`, migration 00037) never borrow the collection shot. A milder veto
+(text/other 0.4, subject "other" 0.5) was tried and reverted: on 40 removed cards it was
+wrong half the time (Duravit vanities, Gessi spouts and flush plates read as "other").
+New subject classes lighting/electrical with 23 Buster + Punch labels so pendants and switch
+plates stop reading as "other" (needs `catalogs vision --reclassify`). Emtek's 5.7k crops had
+never been audited or embedded (`catalogs audit/vision --brand ETK` run).
+
+**Spec images.** `product_images` source='spec' rows get the same CLIP verdict (migration
+00036, `catalogs vision --spec`: 565 images → 329 photo, 200 drawing, 17 text); a spec photo
+at ≥ 0.8 whose subject fits replaces a crop under 300 px or of quality < 0.3 and fills
+families with no picture, below a vendor master (`photo_how='spec'`): 56 families gained a
+card (Watermark 38, which has no catalog at all, California Faucets 9, Emtek 7); all 40
+sampled spec cards are product photographs.
+
+**Card counts.** Before: 30,694 families, 15,182 with a card photo (12,195 crop, 2,987
+series) + 3,041 vendor masters. After (with the books the catalog track ingested meanwhile):
+34,054 families, 15,816 with a card photo (11,651 crop, 4,109 series, 56 spec) + 3,041
+masters; zero cards carry a crop the model calls text/other at ≥ 0.6. Still open: 335
+catalog products no price-book line supports any more (Emtek finish codes "US10B" created
+before the reference rule) and the Lacava swatch grids until `catalogs vision --brand LAV`
+finishes; the subject head's "other" class is too soft to veto below 0.7.
+
+**Duplicate shots.** `catalogs dedupe` (migration 00041, `catalog_crops.dup_of`) marks a crop
+that repeats a larger copy of the same photograph within a brand (CLIP cosine ≥ 0.97 on the
+stored embeddings, aspect within 15 %, largest kept): 17,011 of 50.8k crops (California
+Faucets 2,811, Baldwin 2,601, Ashley Norton 2,382); 19 of 20 sampled pairs were the same
+shot. The product gallery and the upscaler queue skip duplicates. PDQ (ajdnik/imghash) is
+still the answer for crops without an embedding; none exist once `catalogs vision` has run.
+
