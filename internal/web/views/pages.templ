@@ -1,0 +1,588 @@
+package views
+
+import (
+	"fmt"
+
+	"georges_/internal/store"
+)
+
+templ Home(s Stats, hero []HeroBook, tiles []store.HomeTileView, books []store.BrandBook, brands []store.Brand, featured []store.BrandCard) {
+	@Layout("Home") {
+		<section class="hero px-6 py-10 md:px-12 md:py-14 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-10 items-center">
+			<div class="max-w-xl">
+				<div class="flex items-center gap-3"><img src="/static/icon-64.png" alt="" class="h-8 w-8"/><div class="eyebrow" style="color:var(--accent-2)">Pasadena · Decorative plumbing, hardware &amp; appliances</div></div>
+				<h1 class="font-display mt-4 text-[2.6rem] md:text-[3.6rem] leading-[1.02]" style="font-weight:400;text-wrap:balance">
+					Every fixture we carry, <em style="font-style:italic;color:var(--accent-2)">drawn from the makers' own books.</em>
+				</h1>
+				<div class="rule mt-6"></div>
+				<p class="mt-5 text-[1.02rem] leading-relaxed" style="color:rgba(237,238,234,.78);max-width:52ch">
+					Price books, spec sheets and catalog photography from { Itoa(s.Brands) } brands, searchable by SKU, finish or collection. Built for the showroom floor and the trade.
+				</p>
+				<form class="search-hero mt-7 flex gap-2" action="/shop" method="get" hx-boost="false">
+					<input id="hero-q" type="search" name="q" placeholder="Try  K30-123  or  “widespread brushed nickel”" class="flex-1 rounded-full px-5 py-3 text-sm" autocomplete="off"/>
+					<button class="rounded-full px-5 py-3 text-sm font-semibold text-white" style="background:var(--brand)">Search</button>
+				</form>
+				<div class="mt-8 flex flex-wrap gap-x-8 gap-y-2 text-sm num" style="color:rgba(237,238,234,.7)">
+					<span><strong class="text-white font-semibold">{ Thousands(s.Catalogs) }</strong> catalogs</span>
+					<span><strong class="text-white font-semibold">{ Thousands(s.Pages) }</strong> pages indexed</span>
+					<span><strong class="text-white font-semibold">{ Thousands(s.Products) }</strong> SKUs</span>
+				</div>
+			</div>
+			<div class="cover-stack hidden lg:block justify-self-end w-[520px]">
+				for _, c := range hero {
+					<a href={ templ.SafeURL("/catalog/" + Itoa(c.ID)) } title={ c.Title }><img src={ c.Image } alt={ c.Title } loading="eager" decoding="async"/></a>
+				}
+			</div>
+		</section>
+
+		<section class="mt-12">
+			<div class="flex items-baseline justify-between mb-4">
+				<h2 class="font-display text-2xl" style="font-weight:500">Shop by category</h2>
+				<a href="/shop" class="text-sm font-medium" style="color:var(--accent)">Everything we carry →</a>
+			</div>
+			@TileSet(tiles)
+		</section>
+
+		if len(books) > 0 {
+			<section class="mt-14">
+				<div class="flex items-baseline justify-between mb-2">
+					<h2 class="font-display text-2xl" style="font-weight:500">The makers' books</h2>
+					<a href="/catalogs" class="text-sm font-medium" style="color:var(--accent)">All { Itoa(s.Catalogs) } catalogs →</a>
+				</div>
+				@BookWheel(books)
+			</section>
+		}
+
+		<section class="mt-14">
+			<div class="flex items-baseline justify-between mb-4">
+				<h2 class="font-display text-2xl" style="font-weight:500">Featured brands</h2>
+				<a href="/brands" class="text-sm font-medium" style="color:var(--accent)">All { Itoa(len(brands)) } brands →</a>
+			</div>
+			@BrandWall(featured)
+		</section>
+	}
+}
+
+templ BrandColumns(brands []store.Brand) {
+	<div class="brand-cols text-[0.9rem]">
+		{{ last := "" }}
+		for _, b := range brands {
+			if Initial(b.Name) != last {
+				{{ last = Initial(b.Name) }}
+				<div class="initial">{ last }</div>
+			}
+			<a href={ templ.SafeURL("/brand/" + b.Slug) }>{ b.Name }
+				if b.Families > 0 {
+					<span class="num text-xs" style="color:var(--nickel)"> · { Itoa(b.Families) }</span>
+				}
+			</a>
+		}
+	</div>
+}
+
+templ BrandGrid(brands []store.Brand) {
+	<div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
+		for _, b := range brands {
+			<a href={ templ.SafeURL("/brand/" + b.Slug) } class="rounded-lg bg-white border border-neutral-200 p-3 hover:border-sky-500 flex flex-col items-center gap-2">
+				if b.Logo != "" {
+					<img src={ b.Logo } alt="" class="h-10 object-contain" loading="lazy" onerror="this.remove()"/>
+				}
+				<span class="text-sm font-medium text-center">{ b.Name }</span>
+				if b.Families > 0 {
+					<span class="text-xs text-neutral-400">{ Itoa(b.Families) } families · { Itoa(b.Products) } SKUs</span>
+				}
+			</a>
+		}
+	</div>
+}
+
+// logoCheck swaps an image for a text wordmark when it failed, is tiny, or is invisible on white.
+script logoCheck() {
+	function bad(img){var s=document.createElement('span');s.className='brand-text';s.textContent=img.alt||'';img.replaceWith(s);}
+	function check(img){
+		if(!img.naturalWidth||img.naturalWidth<40){bad(img);return;}
+		try{var c=document.createElement('canvas');var w=c.width=Math.min(img.naturalWidth,120),h=c.height=Math.max(1,Math.round(img.naturalHeight*w/img.naturalWidth));
+			var x=c.getContext('2d');x.drawImage(img,0,0,w,h);var d=x.getImageData(0,0,w,h).data,n=0,br=0;
+			for(var i=0;i<d.length;i+=16){if(d[i+3]<64)continue;n++;if(d[i]>230&&d[i+1]>230&&d[i+2]>230)br++;}
+			if(n<8||br/n>0.92)bad(img);}catch(e){}
+	}
+	document.querySelectorAll('img[data-logo]').forEach(function(img){ if(img.complete){check(img);} else {img.addEventListener('load',function(){check(img);}); img.addEventListener('error',function(){bad(img);});} });
+}
+
+templ BrandWall(cards []store.BrandCard) {
+	<div class="brand-wall">
+		for _, b := range cards {
+			<a href={ templ.SafeURL("/brand/" + b.Slug) } class="brand-tile" title={ b.Name }>
+				if b.Logo != "" {
+					<img src={ b.Logo } alt={ b.Name } loading="lazy" data-logo/>
+				} else {
+					<span class="brand-text">{ b.Name }</span>
+				}
+			</a>
+		}
+	</div>
+	@logoCheck()
+}
+
+templ Brands(cards []store.BrandCard, room string, counts map[string]int, total int) {
+	@Layout("Brands") {
+		<div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+			<div>
+				<div class="eyebrow">Brands</div>
+				<h1 class="font-display text-3xl md:text-4xl" style="font-weight:500">The makers we carry</h1>
+				<p class="mt-2 max-w-2xl" style="color:var(--nickel)">{ Itoa(total) } manufacturers of decorative plumbing, hardware and appliances, with their current price books and catalogs.</p>
+			</div>
+			<nav class="flex flex-wrap gap-2 text-sm" aria-label="Filter brands by room">
+				<a href="/brands" class={ "room-chip", templ.KV("on", room == "") }>All <span class="num">{ Itoa(total) }</span></a>
+				for _, r := range store.Rooms {
+					if counts[r.Slug] > 0 {
+						<a href={ templ.SafeURL("/brands?room=" + r.Slug) } class={ "room-chip", templ.KV("on", room == r.Slug) }>{ r.Name } <span class="num">{ Itoa(counts[r.Slug]) }</span></a>
+					}
+				}
+			</nav>
+		</div>
+		<div class="brand-wall wall-lg">
+			for _, b := range cards {
+				<a href={ templ.SafeURL("/brand/" + b.Slug) } class="brand-tile-lg" title={ b.Name }>
+					<div class="mark">
+						if b.Logo != "" {
+							<img src={ b.Logo } alt={ b.Name } loading="lazy" decoding="async" data-logo/>
+						} else {
+							<span class="brand-text">{ b.Name }</span>
+						}
+					</div>
+					<div class="cap">
+						<div class="name">{ b.Name }</div>
+						<div class="meta num">
+							if b.Families > 0 {
+								{ Thousands(b.Families) } products
+							}
+							if b.Families > 0 && b.Catalogs > 0 {
+								<span class="dot">·</span>
+							}
+							if b.Catalogs > 0 {
+								{ Itoa(b.Catalogs) } catalogs
+							}
+							if b.Families == 0 && b.Catalogs == 0 {
+								catalog coming
+							}
+						</div>
+					</div>
+				</a>
+			}
+		</div>
+		@logoCheck()
+	}
+}
+
+templ Brand(b store.Brand, fams []store.FamilyRow, cats []store.CategoryCount, active string, pg Pager) {
+	@Layout(b.Name) {
+		<div class="flex items-baseline gap-4 mb-4">
+			<h1 class="font-display text-3xl" style="font-weight:500">{ b.Name }</h1>
+			<span class="text-sm text-neutral-500">{ Itoa(pg.Total) } product families</span>
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
+			<aside class="text-sm">
+				<h2 class="font-semibold mb-2">Category</h2>
+				<ul class="space-y-1">
+					<li><a class={ "hover:underline", templ.KV("font-semibold", active == "") } href={ templ.SafeURL("/brand/" + b.Slug) }>All</a></li>
+					for _, c := range cats {
+						<li><a class={ "hover:underline", templ.KV("font-semibold", active == c.Name) } href={ templ.SafeURL("/brand/" + b.Slug + "?category=" + c.Name) }>{ c.Name } <span class="text-neutral-400">({ Itoa(c.Count) })</span></a></li>
+					}
+				</ul>
+			</aside>
+			<div>
+				<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+					for _, fam := range fams {
+						@FamilyCard(fam)
+					}
+				</div>
+				@Pagination(pg)
+			</div>
+		</div>
+	}
+}
+
+templ Pagination(pg Pager) {
+	if pg.Pages() > 1 {
+		<nav class="flex items-center justify-center gap-3 mt-8 text-sm">
+			if pg.HasPrev() {
+				<a class="rounded-full border px-3 py-1 bg-white" style="border-color:var(--line)" href={ templ.SafeURL(pg.URL(pg.Page - 1)) }>‹ Prev</a>
+			}
+			<span class="num">Page { Itoa(pg.Page) } of { Itoa(pg.Pages()) }</span>
+			if pg.HasNext() {
+				<a class="rounded-full border px-3 py-1 bg-white" style="border-color:var(--line)" href={ templ.SafeURL(pg.URL(pg.Page + 1)) }>Next ›</a>
+			}
+		</nav>
+	}
+}
+
+templ Products(fams []store.FamilyRow, cats []store.CategoryCount, f store.FamilyFilter, pg Pager) {
+	@Layout("Products") {
+		<div class="grid grid-cols-1 lg:grid-cols-[220px_1fr] gap-6">
+			<aside class="text-sm">
+				<h2 class="font-semibold mb-2">Category</h2>
+				<ul class="space-y-1">
+					for _, c := range cats {
+						<li><a class={ "hover:underline", templ.KV("font-semibold", f.Category == c.Name) } href={ templ.SafeURL("/products?category=" + c.Name + "&brand=" + f.BrandSlug) }>{ c.Name } <span class="text-neutral-400">({ Itoa(c.Count) })</span></a></li>
+					}
+				</ul>
+			</aside>
+			<div>
+				<div class="flex items-baseline justify-between mb-3">
+					<h1 class="text-2xl font-semibold">
+						if f.Category != "" {
+							{ f.Category }
+						} else if f.Query != "" {
+							Results for “{ f.Query }”
+						} else {
+							All products
+						}
+					</h1>
+					<span class="text-sm text-neutral-500">{ Itoa(pg.Total) } families</span>
+				</div>
+				<div id="grid">
+					@ProductGrid(fams, pg)
+				</div>
+			</div>
+		</div>
+	}
+}
+
+templ ProductGrid(fams []store.FamilyRow, pg Pager) {
+	<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+		for _, f := range fams {
+			<a href={ templ.SafeURL("/product/" + I64(f.ID)) } class="group rounded-lg bg-white border border-neutral-200 overflow-hidden hover:border-sky-500 flex flex-col">
+				<div class="card-img">
+					if f.Image != "" {
+						<img src={ Img(f.Image, 640) } srcset={ CardSrcset(f.Image) } sizes={ CardSizes } alt="" loading="lazy" decoding="async" onerror="this.parentElement.innerHTML='<div class=&quot;text-neutral-300 text-xs&quot;>image pending</div>'"/>
+					} else {
+						<div class="text-neutral-300 text-xs">no image</div>
+					}
+				</div>
+				<div class="p-3 text-sm flex-1 flex flex-col">
+					<div class="text-xs uppercase tracking-wide text-neutral-500">{ f.BrandName }</div>
+					<div class="font-medium leading-snug line-clamp-2">{ f.Title }</div>
+					<div class="text-xs text-neutral-500 mt-1">{ f.FamilyKey }
+						if f.Finishes > 1 {
+							· { Itoa(f.Finishes) } finishes
+						}
+					</div>
+					<div class="mt-auto pt-2 font-semibold">{ PriceRange(f.MinCents, f.MaxCents) }</div>
+				</div>
+			</a>
+		}
+	</div>
+	if pg.Pages() > 1 {
+		<nav class="flex items-center justify-center gap-3 mt-6 text-sm">
+			if pg.HasPrev() {
+				<a class="rounded border px-3 py-1 bg-white" href={ templ.SafeURL(pg.URL(pg.Page - 1)) }>‹ Prev</a>
+			}
+			<span>Page { Itoa(pg.Page) } of { Itoa(pg.Pages()) }</span>
+			if pg.HasNext() {
+				<a class="rounded border px-3 py-1 bg-white" href={ templ.SafeURL(pg.URL(pg.Page + 1)) }>Next ›</a>
+			}
+		</nav>
+	}
+}
+
+templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, imgs []string, pages []store.CatalogHit, drawings []string) {
+	@Layout(f.BrandName + " " + f.Title) {
+		<nav class="text-xs text-neutral-500 mb-3 flex gap-2">
+			<a href={ templ.SafeURL("/brand/" + f.BrandSlug) } class="hover:underline">{ f.BrandName }</a>
+			for _, c := range f.Category {
+				<span>›</span><a href={ templ.SafeURL("/shop?category=" + c) } class="hover:underline">{ c }</a>
+			}
+		</nav>
+		<div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+			<div>
+				if len(imgs) > 0 {
+					<img id="main-img" src={ Img(imgs[0], 960) } srcset={ HeroSrcset(imgs[0]) } sizes={ HeroSizes } alt="" fetchpriority="high" class="w-full rounded-lg bg-white object-contain aspect-square p-4" style="border:1px solid var(--line)"/>
+					if len(imgs) > 1 {
+						<div class="flex gap-2 mt-2 overflow-x-auto">
+							for _, im := range imgs {
+								<img src={ Img(im, 160) } data-full={ Img(im, 960) } data-srcset={ HeroSrcset(im) } class="h-16 w-16 object-contain bg-white rounded cursor-pointer" style="border:1px solid var(--line)" onclick="var m=document.getElementById('main-img');m.srcset=this.dataset.srcset;m.src=this.dataset.full" onerror="this.remove()" loading="lazy"/>
+							}
+						</div>
+					}
+				} else if len(pages) > 0 {
+					<a href={ templ.SafeURL("/catalog/" + Itoa(pages[0].CatalogID) + "?p=" + Itoa(pages[0].Page)) } class="block rounded-lg bg-white overflow-hidden" style="border:1px solid var(--line)">
+						<img src={ "/catalog/" + Itoa(pages[0].CatalogID) + "/page/" + Itoa(pages[0].Page) } alt="" class="w-full object-cover" style="aspect-ratio:1/1;object-position:top"/>
+					</a>
+					<div class="text-xs mt-2" style="color:var(--nickel)">Shown in { pages[0].BrandCode } · { pages[0].Title }, page { Itoa(pages[0].Page) }. Product photo extraction is still running for this book.</div>
+				} else {
+					<div class="aspect-square rounded-lg" style="border:1px solid var(--line)"><div class="placeholder"><img src="/static/icon-64.png" alt=""/><span>{ f.ProductType }</span></div></div>
+				}
+				if len(drawings) > 0 {
+					<div class="mt-4">
+						<div class="eyebrow mb-1">Dimensions &amp; drawings</div>
+						<div class="flex gap-2 overflow-x-auto">
+							for _, d := range drawings {
+								<img src={ Img(d, 320) } alt="" class="h-24 rounded bg-white" style="border:1px solid var(--line)" loading="lazy"/>
+							}
+						</div>
+					</div>
+				}
+				if len(pages) > 0 {
+					<div class="mt-4">
+						<div class="eyebrow mb-1">In the maker's books</div>
+						<ul class="text-sm space-y-0.5">
+							for i, h := range pages {
+								if i < 6 {
+									<li><a class="hover:underline" style="color:var(--accent)" href={ templ.SafeURL("/catalog/" + Itoa(h.CatalogID) + "?p=" + Itoa(h.Page)) }>{ h.Title } · p. { Itoa(h.Page) }</a></li>
+								}
+							}
+						</ul>
+					</div>
+				}
+			</div>
+			<div>
+				<div class="text-sm uppercase tracking-wide text-neutral-500">{ f.BrandName }</div>
+				<h1 class="text-2xl font-semibold">{ f.Title }</h1>
+				<div class="text-neutral-500 text-sm mt-1">{ f.FamilyKey }
+					if f.Collection != "" {
+						· { f.Collection } collection
+					}
+				</div>
+				<div class="mt-3 flex items-baseline gap-3 flex-wrap">
+					<div class="text-3xl font-semibold num">{ PriceRange(f.MinCents, f.MaxCents) }</div>
+					<div class="eyebrow">George's price</div>
+				</div>
+				if f.ListMin > 0 && f.ListMin > f.MinCents {
+					<div class="text-sm num mt-1" style="color:var(--nickel)">List price <s>{ PriceRange(f.ListMin, f.ListMax) }</s> · <span style="color:var(--accent)">you save { Itoa(SavePct(f.ListMin, f.MinCents)) }%</span></div>
+				}
+				<p class="text-xs mt-2 max-w-md" style="color:var(--nickel)">Prices are subject to verification by our showroom team. Freight is quoted separately when it applies.</p>
+				if f.Description != "" {
+					<p class="mt-4 text-neutral-700 leading-relaxed">{ f.Description }</p>
+				}
+				if len(skus) > 0 {
+					<h2 class="mt-6 font-semibold">Finishes &amp; SKUs <span class="text-neutral-400 font-normal text-sm">({ Itoa(len(skus)) })</span></h2>
+					<table class="mt-2 w-full text-sm">
+						<tbody>
+							for _, s := range skus {
+								<tr class="border-t">
+									<td class="py-1.5 font-mono">{ s.SKU }</td>
+									<td class="py-1.5">{ s.Finish }</td>
+									<td class="py-1.5 text-right font-medium num">{ Money(s.PriceCents) }</td>
+									<td class="py-1.5 text-right text-xs num" style="color:var(--nickel)"><s>{ Money(s.MSRPCents) }</s></td>
+								</tr>
+							}
+						</tbody>
+					</table>
+				}
+				if len(docs) > 0 {
+					<h2 class="mt-6 font-semibold">Documents</h2>
+					<ul class="mt-1 text-sm space-y-1">
+						for _, d := range docs {
+							<li><a class="text-sky-700 hover:underline" href={ templ.SafeURL(fmt.Sprintf("/doc/%d", d.ID)) } target="_blank">{ d.Kind } sheet (PDF)</a></li>
+						}
+					</ul>
+				}
+				if len(f.Attributes) > 0 {
+					<h2 class="mt-6 font-semibold">Specifications</h2>
+					<dl class="mt-2 grid grid-cols-[max-content_1fr] gap-x-6 gap-y-1 text-sm">
+						for k, v := range f.Attributes {
+							<dt class="text-neutral-500">{ k }</dt><dd>{ v }</dd>
+						}
+					</dl>
+				}
+				if len(f.Bullets) > 0 {
+					<ul class="mt-4 list-disc pl-5 text-sm text-neutral-700 space-y-1">
+						for _, b := range f.Bullets {
+							<li>{ b }</li>
+						}
+					</ul>
+				}
+			</div>
+		</div>
+	}
+}
+
+templ SearchResults(q string, fams []store.FamilyRow, total int, hits []store.CatalogHit) {
+	if len(fams) == 0 && len(hits) == 0 {
+		<div class="rounded-md bg-white border shadow p-3 text-sm text-neutral-500">No matches for “{ q }”</div>
+	} else {
+		<div class="rounded-md bg-white border shadow divide-y text-sm max-h-[70vh] overflow-auto">
+			for _, f := range fams {
+				<a href={ templ.SafeURL("/product/" + I64(f.ID)) } class="flex items-center gap-3 p-2 hover:bg-neutral-50">
+					if f.Image != "" {
+						<img src={ Img(f.Image, 160) } class="h-10 w-10 object-contain" loading="lazy" onerror="this.remove()"/>
+					} else {
+						<span class="h-10 w-10 flex items-center justify-center rounded" style="background:var(--stone)"><img src="/static/icon-64.png" class="h-5 w-5 opacity-30 grayscale" alt=""/></span>
+					}
+					<div class="flex-1 min-w-0"><div class="font-medium truncate">{ f.BrandName } { f.Title }</div><div class="text-xs text-neutral-500">{ f.FamilyKey } · { PriceRange(f.MinCents, f.MaxCents) }</div></div>
+				</a>
+			}
+			if total > len(fams) {
+				<a href={ templ.SafeURL("/shop?q=" + q) } class="block p-2 hover:underline" style="color:var(--accent)">See all { Itoa(total) } results ›</a>
+			}
+			for _, h := range hits {
+				<a href={ templ.SafeURL("/catalog/" + Itoa(h.CatalogID) + "?p=" + Itoa(h.Page)) } class="block p-2 hover:bg-neutral-50">
+					<div class="text-xs uppercase text-neutral-500">{ h.BrandCode } catalog · { h.Title } · p.{ Itoa(h.Page) }</div>
+					<div class="text-neutral-700">@templ.Raw(h.Snippet)</div>
+				</a>
+			}
+		</div>
+	}
+}
+
+templ Catalogs(rows []store.CatalogRow) {
+	@Layout("Vendor catalogs") {
+		<h1 class="text-2xl font-semibold mb-4">Vendor catalogs &amp; price books <span class="text-sm text-neutral-500 font-normal">({ Itoa(len(rows)) })</span></h1>
+		<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+			for _, c := range rows {
+				<a href={ templ.SafeURL("/catalog/" + Itoa(c.ID)) } class="rounded-lg bg-white border border-neutral-200 overflow-hidden hover:border-sky-500">
+					<img src={ "/catalog/" + Itoa(c.ID) + "/thumb" } class="w-full aspect-[3/4] object-cover bg-neutral-100" loading="lazy" onerror="this.style.visibility='hidden'"/>
+					<div class="p-2 text-xs">
+						<div class="uppercase text-neutral-500">{ c.BrandCode }</div>
+						<div class="font-medium leading-snug line-clamp-2">
+							if c.Title != "" {
+								{ c.Title }
+							} else {
+								{ c.Name }
+							}
+						</div>
+						<div class="text-neutral-400">{ Itoa(c.Pages) } pages
+							if c.HasText {
+								· searchable
+							}
+						</div>
+					</div>
+				</a>
+			}
+		</div>
+		@logoCheck()
+	}
+}
+
+templ SKU(sku string, crops []store.CropView, pages []store.CatalogHit) {
+	@Layout(sku) {
+		<div class="eyebrow">SKU lookup</div>
+		<h1 class="font-display text-3xl mb-6" style="font-weight:500">{ sku }</h1>
+		if len(crops) == 0 && len(pages) == 0 {
+			<p style="color:var(--nickel)">Nothing extracted for this SKU yet. Run the catalog OCR and extract commands for its brand.</p>
+		}
+		if len(crops) > 0 {
+			<h2 class="font-display text-xl mb-3" style="font-weight:500">Catalog imagery <span class="text-sm" style="color:var(--nickel)">({ Itoa(len(crops)) })</span></h2>
+			<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-10">
+				for _, c := range crops {
+					<a href={ templ.SafeURL("/catalog/" + Itoa(c.CatalogID) + "?p=" + Itoa(c.Page)) } class="block rounded-lg overflow-hidden bg-white" style="border:1px solid var(--line)">
+						<img src={ Img("/files/" + c.Path, 640) } srcset={ CardSrcset("/files/" + c.Path) } sizes={ CardSizes } alt="" class="w-full aspect-square object-contain p-2" loading="lazy"/>
+						<div class="p-2 text-xs" style="color:var(--nickel)">{ c.BrandCode } · { c.Title } · p.{ Itoa(c.Page) } · match { c.SKU }</div>
+					</a>
+				}
+			</div>
+		}
+		if len(pages) > 0 {
+			<h2 class="font-display text-xl mb-3" style="font-weight:500">Mentioned on</h2>
+			<ul class="space-y-1 text-sm">
+				for _, h := range pages {
+					<li><a class="hover:underline" style="color:var(--accent)" href={ templ.SafeURL("/catalog/" + Itoa(h.CatalogID) + "?p=" + Itoa(h.Page)) }>{ h.BrandCode } · { h.Title } · page { Itoa(h.Page) }</a> <span style="color:var(--nickel)">@templ.Raw(h.Snippet)</span></li>
+				}
+			</ul>
+		}
+	}
+}
+
+// BookWheel is a coverflow of one book per brand: arrows, keyboard, click-to-center, gentle
+// autoplay. Only covers near the front carry a src; the script fills the rest as they approach.
+templ BookWheel(books []store.BrandBook) {
+	<div class="wheel" id="book-wheel" tabindex="0" role="region" aria-roledescription="carousel" aria-label="Catalogs by brand">
+		<button type="button" class="wheel-btn prev" aria-label="Previous brand">‹</button>
+		<div class="wheel-stage">
+			for i, b := range books {
+				<a class="wheel-item" href={ templ.SafeURL("/catalog/" + Itoa(b.CatalogID)) } data-i={ Itoa(i) } data-brand={ b.BrandName } data-title={ b.Title } data-pages={ Itoa(b.Pages) } data-slug={ b.BrandSlug }>
+					if i < 6 || i >= len(books)-5 {
+						<img src={ "/catalog/" + Itoa(b.CatalogID) + "/cover" } alt={ b.BrandName + " — " + b.Title } decoding="async"/>
+					} else {
+						<img data-src={ "/catalog/" + Itoa(b.CatalogID) + "/cover" } alt={ b.BrandName + " — " + b.Title } decoding="async"/>
+					}
+				</a>
+			}
+		</div>
+		<button type="button" class="wheel-btn next" aria-label="Next brand">›</button>
+		<div class="wheel-caption" aria-live="polite">
+			<a class="wheel-brand font-display" href="#">&nbsp;</a>
+			<div class="wheel-meta"><span class="wheel-title"></span> <span class="wheel-count num"></span></div>
+		</div>
+	</div>
+	@bookWheelScript()
+}
+
+script bookWheelScript() {
+	var w=document.getElementById('book-wheel'); if(!w) return;
+	var items=[].slice.call(w.querySelectorAll('.wheel-item')), n=items.length, cur=0, timer=null, paused=false;
+	var brand=w.querySelector('.wheel-brand'), title=w.querySelector('.wheel-title'), count=w.querySelector('.wheel-count');
+	var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+	function gap(){ return window.innerWidth<640?120:(window.innerWidth<1024?160:200); }
+	function layout(){
+		var g=gap();
+		items.forEach(function(el,i){
+			var o=i-cur; if(o>n/2) o-=n; if(o<-n/2) o+=n;
+			var a=Math.abs(o), vis=a<=4;
+			el.style.transform='translate(-50%,-50%) translateX('+(o*g)+'px) translateZ('+(-a*150)+'px) rotateY('+(-o*24)+'deg) scale('+(o===0?1:0.9)+')';
+			el.style.opacity=vis?String(1-a*0.12):'0';
+			el.style.zIndex=String(100-a);
+			el.style.pointerEvents=vis?'auto':'none';
+			el.classList.toggle('is-center',o===0);
+			if(a<=5){ var im=el.querySelector('img'); if(im&&im.dataset.src){ im.src=im.dataset.src; delete im.dataset.src; } }
+		});
+		var c=items[cur];
+		brand.textContent=c.dataset.brand; brand.href='/brand/'+c.dataset.slug;
+		title.textContent=c.dataset.title+' · '+c.dataset.pages+' pp'; count.textContent=(cur+1)+' / '+n;
+	}
+	function go(i){ cur=((i%n)+n)%n; layout(); }
+	w.querySelector('.prev').addEventListener('click',function(){ go(cur-1); restart(); });
+	w.querySelector('.next').addEventListener('click',function(){ go(cur+1); restart(); });
+	items.forEach(function(el,i){ el.addEventListener('click',function(e){ if(i!==cur){ e.preventDefault(); go(i); restart(); } }); });
+	w.addEventListener('keydown',function(e){
+		if(e.key==='ArrowRight'){ go(cur+1); e.preventDefault(); } else if(e.key==='ArrowLeft'){ go(cur-1); e.preventDefault(); }
+		else if(e.key==='Home'){ go(0); e.preventDefault(); } else if(e.key==='End'){ go(n-1); e.preventDefault(); }
+		else if(e.key==='Enter'){ items[cur].click(); }
+		restart();
+	});
+	// mouse wheel / trackpad over the stage turns the wheel (throttled so one notch = one book)
+	var stage=w.querySelector('.wheel-stage'), lastWheel=0;
+	stage.addEventListener('wheel',function(e){
+		e.preventDefault();
+		var now=Date.now(); if(now-lastWheel<320) return; lastWheel=now;
+		var d=Math.abs(e.deltaX)>Math.abs(e.deltaY)?e.deltaX:e.deltaY;
+		if(d>0) go(cur+1); else if(d<0) go(cur-1);
+		restart();
+	},{passive:false});
+	var startX=null;
+	w.addEventListener('pointerdown',function(e){ startX=e.clientX; });
+	w.addEventListener('pointerup',function(e){ if(startX===null) return; var dx=e.clientX-startX; startX=null; if(Math.abs(dx)>40){ go(dx<0?cur+1:cur-1); restart(); } });
+	function tick(){ if(!paused && !document.hidden) go(cur+1); }
+	function restart(){ if(timer) clearInterval(timer); if(!reduce) timer=setInterval(tick,4500); }
+	['mouseenter','focusin'].forEach(function(ev){ w.addEventListener(ev,function(){ paused=true; }); });
+	['mouseleave','focusout'].forEach(function(ev){ w.addEventListener(ev,function(){ paused=false; }); });
+	window.addEventListener('resize',layout);
+	layout(); restart();
+}
+
+// TileSet is the landing grid: two wide room tiles, then the product categories, each backed by
+// a photograph from the makers' books (curated at /admin/covers?room=home).
+templ TileSet(tiles []store.HomeTileView) {
+	<div class="tile-set">
+		for _, t := range tiles {
+			<a href={ templ.SafeURL(t.Href) } class={ "tile", templ.KV("tile-room", t.IsRoom()) } title={ tileTitle(t) }>
+				<div class="tile-img">
+					if t.Cover.Path != "" {
+						if t.IsRoom() {
+							<img src={ Img("/files/" + t.Cover.Path, 960) } srcset={ HeroSrcset("/files/" + t.Cover.Path) } sizes="(min-width:900px) 50vw, 100vw" alt="" loading="lazy" decoding="async"/>
+						} else {
+							<img src={ Img("/files/" + t.Cover.Path, 640) } srcset={ CardSrcset("/files/" + t.Cover.Path) } sizes="(min-width:900px) 20vw, 50vw" alt="" loading="lazy" decoding="async"/>
+						}
+					}
+				</div>
+				<div class="tile-label">
+					<span class="tile-name">{ t.Name }</span>
+					if t.Count > 0 {
+						<span class="tile-count num">{ Thousands(t.Count) }</span>
+					}
+				</div>
+			</a>
+		}
+	</div>
+}

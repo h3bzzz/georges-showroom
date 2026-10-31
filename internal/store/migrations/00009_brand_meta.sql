@@ -1,0 +1,6 @@
+-- +goose Up
+ALTER TABLE brands ADD COLUMN IF NOT EXISTS featured boolean NOT NULL DEFAULT false;
+ALTER TABLE brands ADD COLUMN IF NOT EXISTS domain text;
+ALTER TABLE brands ADD COLUMN IF NOT EXISTS blurb text;
+-- +goose Down
+ALTER TABLE brands DROP COLUMN IF EXISTS featured, DROP COLUMN IF EXISTS domain, DROP COLUMN IF EXISTS blurb;

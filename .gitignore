@@ -1,0 +1,10 @@
+.env
+.chrome-profile/
+data/raw/
+bin/
+*.pdf
+*.jpg
+*.jpeg
+.air/
+node_modules/
+/georges

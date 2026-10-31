@@ -1,0 +1,67 @@
+package views
+
+import "georges_/internal/store"
+
+// Catalog is the continuous-scroll reader: every page stacked, lazy-loaded, with a table of
+// contents rail that jumps by anchor and tracks the visible page.
+templ Catalog(c store.CatalogRow, start int, tocs []store.TOCEntry, skus map[int][]string) {
+	@Layout(c.Title) {
+		<div class="flex items-center gap-4 mb-4 flex-wrap">
+			<a href="/catalogs" class="text-sm" style="color:var(--accent)">‹ Catalogs</a>
+			<h1 class="font-display text-xl md:text-2xl" style="font-weight:500">
+				if c.Title != "" {
+					{ c.Title }
+				} else {
+					{ c.Name }
+				}
+			</h1>
+			<span class="eyebrow">{ c.BrandCode } · { Itoa(c.Pages) } pages</span>
+			<form class="ml-auto flex items-center gap-2 text-sm" onsubmit="event.preventDefault();const n=Math.min(Math.max(parseInt(this.p.value)||1,1),{ Itoa(c.Pages) });document.getElementById('p'+n)?.scrollIntoView({behavior:'smooth',block:'start'})">
+				<label for="goto">Go to page</label>
+				<input id="goto" name="p" type="number" min="1" max={ Itoa(c.Pages) } class="w-20 rounded border px-2 py-1 bg-white num" style="border-color:var(--line)"/>
+				<span id="cur" class="num" style="color:var(--nickel)">1 / { Itoa(c.Pages) }</span>
+			</form>
+		</div>
+		<div class="grid grid-cols-1 lg:grid-cols-[260px_1fr] gap-6 items-start">
+			<aside class="reader-toc lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-auto rounded-lg bg-white p-3 text-sm" style="border:1px solid var(--line)">
+				<div class="eyebrow mb-2">Contents</div>
+				if len(tocs) == 0 {
+					<p style="color:var(--nickel)">No contents yet. This book is being indexed.</p>
+				} else {
+					<ol class="space-y-0.5">
+						for _, t := range tocs {
+							<li><a href={ templ.SafeURL("#p" + Itoa(t.Page)) } data-page={ Itoa(t.Page) } class={ "toc-link flex justify-between gap-3 rounded px-2 py-1 hover:bg-[color:var(--stone)]", templ.KV("font-semibold mt-2", t.Level == 1), templ.KV("pl-4", t.Level == 2) }><span class="truncate">{ t.Title }</span><span class="num shrink-0" style="color:var(--nickel)">{ Itoa(t.Page) }</span></a></li>
+						}
+					</ol>
+				}
+			</aside>
+			<div class="reader space-y-6">
+				for n := 1; n <= c.Pages; n++ {
+					<section id={ "p" + Itoa(n) } data-page={ Itoa(n) } class="page">
+						<div class="page-wrap" hx-get={ "/catalog/" + Itoa(c.ID) + "/page/" + Itoa(n) + "/text" } hx-trigger="intersect once" hx-swap="beforeend">
+							<img src={ "/catalog/" + Itoa(c.ID) + "/page/" + Itoa(n) } alt={ "page " + Itoa(n) } loading="lazy" decoding="async" class="w-full rounded shadow bg-white" style="aspect-ratio:1692/2206"/>
+						</div>
+						<div class="flex items-center gap-2 mt-1.5 text-xs flex-wrap">
+							<span class="num" style="color:var(--nickel)">p. { Itoa(n) }</span>
+							for _, k := range skus[n] {
+								<a href={ templ.SafeURL("/sku/" + k) } class="rounded-full px-2 py-0.5 font-mono bg-white hover:text-[color:var(--accent)]" style="border:1px solid var(--line)">{ k }</a>
+							}
+						</div>
+					</section>
+				}
+			</div>
+		</div>
+		<script>
+		(function(){
+			var cur=document.getElementById('cur'), total={ Itoa(c.Pages) }, links=document.querySelectorAll('.toc-link');
+			var io=new IntersectionObserver(function(es){
+				es.forEach(function(e){ if(e.isIntersecting){ var n=+e.target.dataset.page; cur.textContent=n+' / '+total;
+					var best=null; links.forEach(function(l){ if(+l.dataset.page<=n) best=l; });
+					links.forEach(function(l){ l.classList.toggle('active', l===best); }); }});
+			},{rootMargin:'-40% 0px -55% 0px'});
+			document.querySelectorAll('.reader .page').forEach(function(p){ io.observe(p); });
+			var start={ Itoa(start) }; if(start>1){ var el=document.getElementById('p'+start); if(el) el.scrollIntoView({block:'start'}); }
+		})();
+		</script>
+	}
+}

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<FileZilla3 version="3.71.1" platform="*nix">
+	<Servers>
+		<Server>
+			<Host>ftp.myplumbingshowroom.com</Host>
+			<Port>21</Port>
+			<Protocol>0</Protocol>
+			<Type>0</Type>
+			<User>cGeorges</User>
+			<Logontype>2</Logontype>
+			<PasvMode>MODE_DEFAULT</PasvMode>
+			<EncodingType>Auto</EncodingType>
+			<BypassProxy>0</BypassProxy>
+			<Name>Unilog price file (George's)</Name>
+			<LocalDir>/home/h3bzzz/Code/golang_/georges_/data/raw/pricefile</LocalDir>
+			<Comments>Daily company price file, updated ~4am EST. File starts with "a-" and ends with the date; it is a zip containing the Excel/CSV price file. Password is on /Price-File-Access.HTML (site admin dashboard).</Comments>
+		</Server>
+	</Servers>
+</FileZilla3>

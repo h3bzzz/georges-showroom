@@ -1,0 +1,25 @@
+# Hot reload for the storefront: `air` (install once: go install github.com/air-verse/air@latest)
+root = "."
+tmp_dir = ".air"
+
+[build]
+  # regenerate templ views, then build the CLI; air restarts the serve process on success
+  pre_cmd = ["go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate -path internal/web/views"]
+  cmd = "go build -tags ORT -o bin/georges ./cmd/georges"
+  entrypoint = ["bin/georges", "serve", "--addr", ":8080"]
+  include_ext = ["go", "templ", "css", "sql", "tsv"]
+  exclude_dir = [".air", "bin", "data", "docs", "testdata", ".chrome-profile", "node_modules"]
+  exclude_regex = ["_templ\\.go$", "_test\\.go$"]
+  delay = 400
+  kill_delay = "1s"
+  send_interrupt = true
+  stop_on_error = true
+
+[log]
+  time = true
+
+[misc]
+  clean_on_exit = true
+
+[screen]
+  clear_on_rebuild = false
