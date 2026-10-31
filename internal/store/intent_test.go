@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseIntentBrandSpacing(t *testing.T) {
 	brands := map[string]string{"lacava": "Lacava", "top knobs": "Top-knobs", "sub-zero": "Sub-zero", "subzero": "Sub-zero", "native trails": "Native-trails"}
@@ -24,6 +27,9 @@ func TestParseIntentBrandSpacing(t *testing.T) {
 		if len(in.Concepts) != c.words {
 			t.Errorf("%q: concepts = %d (%v), want %d", c.q, len(in.Concepts), in.Explain(), c.words)
 		}
+	}
+	if in := ParseIntent("trough sink", brands); len(in.Concepts) != 2 || !strings.Contains(in.Explain(), "trough") {
+		t.Errorf("trough sink → %s", in.Explain())
 	}
 	if in := ParseIntent("chrome faucet", brands); len(in.Brands) != 0 {
 		t.Errorf("no brand expected, got %v", in.Brands)

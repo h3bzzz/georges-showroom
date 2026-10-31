@@ -71,6 +71,7 @@ var typeSynonyms = map[string][]string{
 	"tap":          {"faucet", "mixer", "tap "},
 	"mixer":        {"mixer", "faucet"},
 	"sink":         {"sink", "basin", "washbasin", "lavatory", "vessel"},
+	"trough":       {"trough", "sink", "basin"}, // a trough is a sink style; title hits on "trough" rank first
 	"basin":        {"basin", "sink", "washbasin", "lavatory"},
 	"lavatory":     {"lavatory", "basin", "sink"},
 	"toilet":       {"toilet", "water closet", "wc ", "one-piece", "two-piece"},
