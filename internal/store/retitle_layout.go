@@ -239,13 +239,19 @@ func layoutTitle(lines []pageLine, skuX, skuY int, brand string) (string, int) {
 		if l.X1-l.X0 < l.H { // rotated running head
 			continue
 		}
-		if !usableLine(l.Text) {
+		// "COMPATIBLE WITH TROUGH SINKS:" above a column of sinks names that group: keep the noun
+		// phrase ("Trough Sinks"); other relationship notes still score below zero
+		raw := strings.TrimSpace(l.Text)
+		if m := reNotePrefix.FindString(raw); m != "" {
+			raw = strings.TrimRight(strings.TrimSpace(raw[len(m):]), ":")
+		}
+		if !usableLine(raw) {
 			continue
 		}
-		if brand != "" && strings.Contains(strings.ToLower(l.Text), strings.ToLower(brand)) {
+		if brand != "" && strings.Contains(strings.ToLower(raw), strings.ToLower(brand)) {
 			continue // "Duravit attaches great importance to…"
 		}
-		t := trimTitle(unrepeat(cleanTitle(l.Text, "", 0)))
+		t := trimTitle(unrepeat(cleanTitle(raw, "", 0)))
 		sc := scoreTitle(t)
 		if sc < 10 {
 			continue
@@ -304,10 +310,15 @@ func pageHeading(lines []pageLine, brand string) string {
 	return ""
 }
 
+var reNotePrefix = regexp.MustCompile(`(?i)^(compatible with|for use with|designed for|pairs with)\s+`)
+
 // headingText cleans an OCR line and reports whether it reads like a collection heading: up to
 // six real words, no digits or sentence punctuation, not the maker's own name.
 func headingText(line, brand string) (string, bool) {
 	t := cleanTitle(reTMNoise.ReplaceAllString(line, "$1"), "", 0)
+	if reNoteLine.MatchString(t) {
+		return "", false // "COMPATIBLE WITH TROUGH SINKS:" heads one column, not the page (see layoutTitle)
+	}
 	words := strings.Fields(t)
 	if len(words) == 0 || len(words) > 6 || !goodHeading(t) || strings.ContainsAny(t, ".:;\"'/-0123456789") {
 		return "", false
