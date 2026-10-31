@@ -23,6 +23,7 @@ func catalogsPipelineCmd() *cobra.Command {
 	var brand string
 	var workers int
 	var rps float64
+	var relink bool
 	cmd := &cobra.Command{
 		Use:   "pipeline",
 		Short: "For every catalog: download pages, OCR, extract product images (resumable)",
@@ -99,13 +100,17 @@ func catalogsPipelineCmd() *cobra.Command {
 				}
 				_, _ = st.UpsertCatalog(cmd.Context(), c.BrandCode, c.Name, c.Title, c.Pages, "", c.HasText, true)
 				buildTOCAndItems(cmd, st, cfg.DataDir, c)
-				if (i+1)%3 == 0 {
+				if relink && (i+1)%3 == 0 {
 					if n, err := st.LinkCrops(cmd.Context()); err == nil {
 						fmt.Printf("      relinked: %d family↔crop links\n", n)
 					}
 				}
 				fmt.Printf("[%d/%d] %-52s %4d pp  ocr=%-4d crops=%-5d linked=%-5d %s (total %s)\n",
 					i+1, len(rows), b, c.Pages, ocrN, crops, linked, time.Since(t0).Round(time.Second), time.Since(start).Round(time.Minute))
+			}
+			if !relink {
+				fmt.Println("done; run `georges ingest link` then `georges ingest best` to relink crops across all books")
+				return nil
 			}
 			n, err := st.LinkCrops(cmd.Context())
 			fmt.Printf("final relink: %d family↔crop links (%v)\n", n, err)
@@ -115,6 +120,7 @@ func catalogsPipelineCmd() *cobra.Command {
 	cmd.Flags().StringVar(&brand, "brand", "", "only this brand code")
 	cmd.Flags().IntVar(&workers, "workers", 2, "parallel downloads / OCR processes")
 	cmd.Flags().Float64Var(&rps, "rps", 6, "download requests per second cap")
+	cmd.Flags().BoolVar(&relink, "relink", false, "run the global crop relink every 3 books and at the end (30+ min each on a full library; default: run `ingest link` once afterwards)")
 	return cmd
 }
 
