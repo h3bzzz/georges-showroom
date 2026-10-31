@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,7 +24,7 @@ func catalogsPipelineCmd() *cobra.Command {
 	var brand string
 	var workers int
 	var rps float64
-	var relink bool
+	var relink, classify bool
 	cmd := &cobra.Command{
 		Use:   "pipeline",
 		Short: "For every catalog: download pages, OCR, extract product images (resumable)",
@@ -100,6 +101,11 @@ func catalogsPipelineCmd() *cobra.Command {
 				}
 				_, _ = st.UpsertCatalog(cmd.Context(), c.BrandCode, c.Name, c.Title, c.Pages, "", c.HasText, true)
 				buildTOCAndItems(cmd, st, cfg.DataDir, c)
+				// 4. classify the new crops (pixel audit, then CLIP) so a dimension drawing never
+				// becomes a card photo for a freshly ingested brand; both only touch unscored crops
+				if classify && crops > 0 {
+					classifyBrand(cmd, c.BrandCode, workers)
+				}
 				if relink && (i+1)%3 == 0 {
 					if n, err := st.LinkCrops(cmd.Context()); err == nil {
 						fmt.Printf("      relinked: %d family↔crop links\n", n)
@@ -120,6 +126,7 @@ func catalogsPipelineCmd() *cobra.Command {
 	cmd.Flags().StringVar(&brand, "brand", "", "only this brand code")
 	cmd.Flags().IntVar(&workers, "workers", 2, "parallel downloads / OCR processes")
 	cmd.Flags().Float64Var(&rps, "rps", 6, "download requests per second cap")
+	cmd.Flags().BoolVar(&classify, "classify", true, "after each book run `catalogs audit` and `catalogs vision` for the brand (new crops only)")
 	cmd.Flags().BoolVar(&relink, "relink", false, "run the global crop relink every 3 books and at the end (30+ min each on a full library; default: run `ingest link` once afterwards)")
 	return cmd
 }
@@ -202,5 +209,30 @@ func buildTOCAndItems(cmd *cobra.Command, st *store.Store, dataDir string, c sto
 	}
 	if n, err := st.RetitleCatalogFamilies(cmd.Context(), c.BrandCode); err == nil && n > 0 {
 		fmt.Printf("      retitled %d families\n", n)
+	}
+}
+
+// classifyBrand runs the crop audit and the vision classifier for one brand in child processes
+// of this same binary, so the pipeline needs no knowledge of either command's internals.
+func classifyBrand(cmd *cobra.Command, code string, threads int) {
+	self, err := os.Executable()
+	if err != nil {
+		return
+	}
+	for _, args := range [][]string{
+		{"catalogs", "audit", "--brand", code},
+		{"catalogs", "vision", "--brand", code, "--threads", fmt.Sprint(max(threads, 1))},
+	} {
+		c := exec.CommandContext(cmd.Context(), self, args...)
+		out, err := c.CombinedOutput()
+		last := ""
+		if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); len(lines) > 0 {
+			last = lines[len(lines)-1]
+		}
+		if err != nil {
+			fmt.Printf("      %s %s: %v: %s\n", args[1], code, err, last)
+			continue
+		}
+		fmt.Printf("      %s %s: %s\n", args[1], code, last)
 	}
 }
