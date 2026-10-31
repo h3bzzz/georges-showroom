@@ -23,6 +23,7 @@ var glyphs = strings.NewReplacer(
 var (
 	reSpaces  = regexp.MustCompile(`[ \t]+`)
 	reIHole   = regexp.MustCompile(`(^|[\s(])[IlL](-hole)\b`)
+	reColonFr = regexp.MustCompile(`(\d):(\d{1,2}/\d{1,2})`)
 	reGom     = regexp.MustCompile(`(?i)(\d\s*)g[o0]m\b`)
 	rePipeOne = regexp.MustCompile(`(^|[\s:(])[|lI]([.\d]\d*\s*(?:gpm|gpf|"|/))`)
 )
@@ -34,6 +35,7 @@ func Norm(s string) string {
 	s = reGom.ReplaceAllString(s, "${1}gpm")
 	s = rePipeOne.ReplaceAllString(s, "${1}1${2}")
 	s = reIHole.ReplaceAllString(s, "${1}1${2}")
+	s = reColonFr.ReplaceAllString(s, "${1}-${2}") // "6:3/4"" is 6-3/4" with a colon for the dash
 	return reSpaces.ReplaceAllString(s, " ")
 }
 

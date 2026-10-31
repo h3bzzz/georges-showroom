@@ -32,16 +32,27 @@ var typeWords = map[string]bool{
 	"storage": true, "grid": true, "grids": true, "bowl": true, "apron": true, "undermount": true, "farmhouse": true, "classic": true, "traditional": true,
 	"contemporary": true, "modern": true, "transitional": true, "us": true, "usa": true, "edition": true, "limited": true,
 	"horizontal": true, "vertical": true, "spray": true, "flush": true, "rimless": true, "elongated": true, "round": true, "compact": true,
-	"one-piece": true, "two-piece": true, "dual": true, "one": true, "two": true, "piece": true, "design": true, "designs": true, "questions": true,
+	"one-piece": true, "two-piece": true, "dual": true, "floorstanding": true, "floor-standing": true, "wall-mounted": true, "deck-mounted": true, "wall-mount": true, "deck-mount": true, "one": true, "two": true, "piece": true, "design": true, "designs": true, "questions": true,
 	"ordering": true, "information": true, "sales": true, "policy": true, "policies": true, "shipping": true, "freight": true, "returns": true, "tank": true, "number": true, "no": true, "code": true, "qty": true, "stock": true,
 	"type": true, "color": true, "colour": true, "sku": true, "ref": true, "glass": true, "mirror": true, "mirrors": true, "lighting": true,
 	"vanity": true, "vanities": true, "console": true, "consoles": true, "washstand": true, "wood": true, "metal": true, "lavs": true, "lav": true,
-	"slide": true, "body": true, "tap": true, "taps": true, "pillar": true, "edge": true, "edges": true, "appliance": true, "cup": true, "sprays": true, "jets": true, "diverter": true, "diverters": true, "controls": true, "control": true,
+	"slide": true, "body": true, "tap": true, "taps": true, "pillar": true, "edge": true, "edges": true, "appliance": true, "cup": true,
+	"gooseneck": true, "hinges": true, "hinge": true, "rods": true, "rod": true, "bolts": true, "bolt": true, "surface": true, "combinations": true,
+	"combination": true, "selling": true, "best": true, "entrance": true, "tubular": true, "modifications": true, "modification": true, "specialty": true,
+	"handshowers": true, "handshower": true, "discontinued": true, "coming": true, "soon": true, "numerical": true, "listing": true, "builder": true,
+	"luxury": true, "platinum": true, "rosettes": true, "rosette": true, "raincan": true, "strainer": true, "basket": true, "pg": true, "plates": true,
+	"plate": true, "escutcheons": true, "escutcheon": true, "roses": true, "rose": true, "backplate": true, "castlron": true, "iron": true, "cast": true,
+	"showerhead": true, "showerheads": true, "sprayers": true, "sprayer": true,
+	"cabinetry": true, "furniture": true, "tops": true, "top": true, "seats": true, "seat": true, "sprays": true, "jets": true, "diverter": true, "diverters": true, "controls": true, "control": true,
 }
 
 var (
 	reCollNoise = regexp.MustCompile(`(?i)\b(19|20)\d\d\b|[™®"'’,:;.!?]+|\(.*?\)|\bp\.\s*\d+`)
 	reNumber    = regexp.MustCompile(`^\d{2,}$`)
+	reDesignBy  = regexp.MustCompile(`(?i)\bdesign(?:ed)? by\b`)
+	reVowels    = regexp.MustCompile(`[aeiouyAEIOUY]`)
+	reConsRun   = regexp.MustCompile(`(?i)[bcdfghjklmnpqrstvwxz]{4}`)
+	reConsOK    = regexp.MustCompile(`(?i)sch|tch|str|nst|ngt|rst|nth|rth|ndr|mpt|lts|rks|rst|nds|rds|lds`)
 	reCollSplit = regexp.MustCompile(`\s*[·|]\s*|\s+[-/]\s+`)
 )
 
@@ -51,11 +62,8 @@ var (
 // "DuraSquare Vessel Sink Design by Duravit" → "DuraSquare"; "Roman Tub Faucets" → "".
 func Collection(s, brand string) string {
 	s = Norm(s)
-	if i := strings.Index(s, " Design by "); i > 0 {
-		s = s[:i]
-	}
-	if i := strings.Index(s, " design by "); i > 0 {
-		s = s[:i]
+	if loc := reDesignBy.FindStringIndex(s); loc != nil {
+		s = s[:loc[0]] // "ME by Starck … Design by Philippe Starck": the designer is not the line
 	}
 	s = reCollNoise.ReplaceAllString(s, " ")
 	// "Descanso · K30 Series": the name is the first part; "Jason Wu for Brizo" stays whole
@@ -68,6 +76,10 @@ func Collection(s, brand string) string {
 		if reNumber.MatchString(w) {
 			continue // "Vintera 33": a size, not part of the name
 		}
+		if lw == "by" && len(keep) > 0 {
+			keep = append(keep, w) // "ME by Starck" (a trailing "by" is trimmed below)
+			continue
+		}
 		if typeWords[lw] {
 			if (lw == "series" || lw == "collection") && len(keep) > 0 && isCode(keep[len(keep)-1]) {
 				keep = append(keep, titleCase(w)) // "R3 Series", "C2 Series": the code needs the word
@@ -79,17 +91,34 @@ func Collection(s, brand string) string {
 		}
 		keep = append(keep, w)
 	}
+	for len(keep) > 0 && strings.EqualFold(keep[len(keep)-1], "by") {
+		keep = keep[:len(keep)-1]
+	}
 	if len(keep) == 0 || len(keep) > 4 {
 		return ""
 	}
 	if len(keep) == 1 && genericNames[strings.ToLower(keep[0])] {
 		return "" // "Square" from a "Square Spout" heading is a shape, not a line
 	}
-	for i := 1; i < len(keep); i++ {
-		a, b := strings.ToLower(keep[i-1]), strings.ToLower(keep[i])
-		if len(a) >= 4 && len(b) >= 4 && a[:4] == b[:4] {
-			return "" // "Modele Modelo Modello": a heading repeated in three languages
+	caps, title := 0, 0
+	for i, w := range keep {
+		if i > 0 {
+			a, b := strings.ToLower(keep[i-1]), strings.ToLower(w)
+			if len(a) >= 4 && len(b) >= 4 && a[:4] == b[:4] {
+				return "" // "Modele Modelo Modello": a heading repeated in three languages
+			}
 		}
+		if isCode(w) || strings.ToLower(w) == strings.ToUpper(w) {
+			continue // codes and bare numbers have no case
+		}
+		if strings.ToUpper(w) == w {
+			caps++
+		} else {
+			title++
+		}
+	}
+	if caps > 0 && title > 0 {
+		return "" // "Handiefndex CTRREON Canridge": mixed case styles are OCR debris, not a name
 	}
 	out := strings.Join(keep, " ")
 	lb := strings.ToLower(brand)
@@ -164,6 +193,12 @@ func goodCollWord(w string) bool {
 	}
 	if !reWordShape.MatchString(strings.Trim(w, "'")) {
 		return false // "ANco", "fObefn": OCR debris
+	}
+	if len(w) >= 4 && !reVowels.MatchString(w) {
+		return false // no vowel at all: OCR debris
+	}
+	if run := reConsRun.FindString(w); run != "" && !reConsOK.MatchString(run) {
+		return false // "Wramszs", "Pllsse", "Iwwrbses": not pronounceable, not a name
 	}
 	letters := 0
 	for _, r := range w {

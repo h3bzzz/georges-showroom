@@ -121,7 +121,7 @@ var dimKeyPre = []struct {
 	re  *regexp.Regexp
 	key string
 }{
-	{regexp.MustCompile(`(?i)overall height\s*[=:]?\s*$`), "Overall Height"},
+	{regexp.MustCompile(`(?i)overal{1,2} height\s*[=:]?\s*$`), "Overall Height"},
 	{regexp.MustCompile(`(?i)\bmax(?:imum|\.)? height\s*[=:]?\s*$`), "Max Height"},
 	{regexp.MustCompile(`(?i)\b(?:max(?:imum|\.)? )?arm reach\s*[=:]?\s*$`), "Arm Reach"},
 	{regexp.MustCompile(`(?i)\bhose(?: length)?\s*[=:]?\s*$`), "Hose Length"},
@@ -169,7 +169,8 @@ var dimKeyPost = []struct {
 	{regexp.MustCompile(`(?i)^\s?(?:FIP|MIP|NPT|NPSM|IPS|NPTF|BSP|FNPT|MNPT)\b`), "Inlet"},
 	{regexp.MustCompile(`(?i)^\s?deck(?: thickness)?\b`), "Max Deck Thickness"},
 	{regexp.MustCompile(`(?i)^\s?(?:-\s?\d[\d\-/]*"?)?[^.;"]{0,32}?\bhose\b`), "Hose Length"},
-	{regexp.MustCompile(`(?i)^\s?(?:overall )?height\b`), "Height"},
+	{regexp.MustCompile(`(?i)^\s?overal{1,2} height\b`), "Overall Height"},
+	{regexp.MustCompile(`(?i)^\s?height\b`), "Height"},
 	{regexp.MustCompile(`(?i)^\s?(?:overall )?width\b`), "Width"},
 	{regexp.MustCompile(`(?i)^\s?(?:overall )?depth\b`), "Depth"},
 	{regexp.MustCompile(`(?i)^\s?(?:overall )?length\b`), "Length"},
@@ -343,7 +344,7 @@ func (e *ex) addDimText(key, text string, d Dim, conf float64) {
 // ---------- flow ----------
 
 var (
-	reGPM  = regexp.MustCompile(`(?i)(\d{1,2}(?:[.,]\d{1,2})?)\s?gpm(?:\s?(?:@|at)\s?(\d{2,3})\s?psi)?`)
+	reGPM  = regexp.MustCompile(`(?i)(\d{1,3}(?:[.,]\d{1,2})?)\s?gpm(?:\s?(?:@|at)\s?(\d{2,3})\s?psi)?`)
 	reLPM  = regexp.MustCompile(`(?i)(\d{1,2}(?:[.,]\d{1,2})?)\s?(?:l/min|lpm|l/m)\b`)
 	reGPF  = regexp.MustCompile(`(?i)(\d(?:\.\d{1,2})?)(?:\s?/\s?(\d(?:\.\d{1,2})?))?\s?(?:gpf|gal(?:lons?)? per flush)`)
 	reFull = regexp.MustCompile(`(?i)(\d\.\d)\s?gpm to full flow`)
@@ -358,9 +359,12 @@ func (e *ex) flow(t string, conf float64) {
 		g, _ := strconv.ParseFloat(v, 64)
 		if lm := reLPM.FindStringSubmatch(t); lm != nil {
 			l, _ := strconv.ParseFloat(strings.ReplaceAll(lm[1], ",", "."), 64)
-			if l > 0 && g > 0 && g*3.785 > l*1.3 && (g/10)*3.785 < l*1.3 && (g/10)*3.785 > l*0.7 {
-				g = g / 10 // "20 gpm, 7.6 L/min": the OCR dropped the decimal point
-				v = strconv.FormatFloat(g, 'f', 1, 64)
+			for _, div := range []float64{10, 100} {
+				if l > 0 && g > 0 && g*3.785 > l*1.3 && (g/div)*3.785 < l*1.3 && (g/div)*3.785 > l*0.7 {
+					g = g / div // "20 gpm, 7.6 L/min" and "175 gpm, 6.6 L/min": the OCR dropped the decimal point
+					v = strconv.FormatFloat(g, 'f', -1, 64)
+					break
+				}
 			}
 		}
 		if g >= 0.3 && g <= 30 {
@@ -568,7 +572,8 @@ var certRules = []struct {
 }
 
 var (
-	reDesigner = regexp.MustCompile(`[Dd]esign(?:ed)? by ([A-Z][\w.'-]+(?: (?:[A-Z][\w.'-]+|de|van|von|&))?(?: [A-Z][\w.'-]+)?)`)
+	reDesigner = regexp.MustCompile(`[Dd]esign(?:ed)? by ([A-Z][\w.'-]+(?: (?:[A-Z][\w.'-]+|de|van|von|&|and)){0,4})`)
+	reShortEnd = regexp.MustCompile(`(?:^|\s)[A-Za-z]{1,3}$`)
 	reSeriesNo = regexp.MustCompile(`(?i)\bseries:\s?((?:\d{2,4}[A-Z]?(?:,\s?|\s?&\s?|\s?/\s?)?){1,4})`)
 	reValve    = regexp.MustCompile(`(?i)\b(thermostatic|pressure[- ]balanc(?:e|ed|ing))\b`)
 	reCart     = regexp.MustCompile(`(?i)\b(ceramic(?: disc)? cartridge|ceramic disc|quaturn|compression cartridge|progressive cartridge|diamond seal|washerless cartridge)\b`)
@@ -625,9 +630,14 @@ func (e *ex) misc(t string, conf float64) {
 		e.add("Certifications", strings.Join(certs, ", "), "", conf)
 	}
 	if m := reDesigner.FindStringSubmatch(t); m != nil {
-		d := strings.TrimRight(m[1], ".,")
-		if !strings.EqualFold(d, e.in.BrandName) && !strings.Contains(strings.ToLower(e.in.BrandName), strings.ToLower(d)) {
-			e.add("Designer", d, "", conf)
+		d := strings.TrimRight(m[1], ",")
+		if i := strings.Index(d, " Finish"); i > 0 {
+			d = d[:i]
+		}
+		d = strings.TrimSpace(d)
+		// "Studio F. A" / "Chr" / "Pat": the OCR cut the name; initials end with a period
+		if !reShortEnd.MatchString(d) && len(d) >= 6 && !strings.EqualFold(d, e.in.BrandName) && !strings.Contains(strings.ToLower(e.in.BrandName), strings.ToLower(d)) {
+			e.add("Designer", strings.TrimSuffix(d, "."), "", conf)
 		}
 	}
 	if m := reSeriesNo.FindStringSubmatch(t); m != nil && e.in.Brand == "CHI" {
@@ -808,6 +818,11 @@ var worksRules = []*regexp.Regexp{
 }
 
 var reWorksCut = regexp.MustCompile(`(?i)\s(standard|special|premium|see|page|pages)\b.*$|\s\d{2,5}\.\d\d\b.*$|\s\d{2,5}$|[\s,.;:]+$`)
+
+// reWorksNext: a model number followed by a Title-Case word starts the next product's row
+// ("… or 2-VR valves D-E4-37 Deluxe Wall Tub"); case-sensitive on purpose.
+var reWorksNext = regexp.MustCompile(`\s[A-Z0-9]+-[A-Z0-9-]+\s[A-Z][a-z].*$`)
+var reWorksAfter = regexp.MustCompile(`(?i)^(.*?\b(?:valves?|units?|sinks?|faucets?|roughs?|trims?|fittings?))\b.*$`)
 var reCapsJunk = regexp.MustCompile(`\b[A-Z]{5,}\b`)
 var reRequires = regexp.MustCompile(`(?i)\bmust order (rough|handles?|rough valve|valve|trim|spout)s?(?: and (handles?|rough|trim))? separately\b`)
 
@@ -822,7 +837,7 @@ func (e *ex) worksWith() {
 	for _, re := range worksRules {
 		for _, loc := range re.FindAllStringSubmatchIndex(src, 3) {
 			m := []string{src[loc[0]:loc[1]], src[loc[2]:loc[3]]}
-			v := strings.TrimSpace(reWorksCut.ReplaceAllString(m[1], ""))
+			v := strings.TrimSpace(reWorksCut.ReplaceAllString(reWorksNext.ReplaceAllString(m[1], ""), ""))
 			v = strings.TrimRight(v, " ,.;:-")
 			if len(v) < 3 || len(words(v)) > 14 || junkRatio(v) > 0.25 || reCapsJunk.MatchString(v) {
 				continue
@@ -837,6 +852,10 @@ func (e *ex) worksWith() {
 			}
 			if r := v[len(v)-1]; len(v) > 2 && v[len(v)-2] == ' ' && r >= 'a' && r <= 'z' {
 				v = strings.TrimSpace(v[:len(v)-2]) // "rough o": a cut word
+			}
+			v = strings.TrimSpace(reDanglingEnd.ReplaceAllString(reWorksAfter.ReplaceAllString(v, "$1"), ""))
+			if len(v) < 3 {
+				continue
 			}
 			k := strings.ToLower(v)
 			if !seen[k] {

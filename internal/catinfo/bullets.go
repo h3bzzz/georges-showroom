@@ -10,7 +10,7 @@ var (
 	reBulletMark   = regexp.MustCompile(`^\s*[•+«»\-*=>›·]\s*(.+)$`)
 	reBulletSep    = regexp.MustCompile(`\s[+«•·]\s`)
 	rePriceTok     = regexp.MustCompile(`\$\s?\d|\b\d{1,3}(?:,\d{3})+(?:\.\d\d)?\b|\b\d+\.\d\d\b`)
-	reBulletJunk   = regexp.MustCompile(`(?i)\b(see page|see pages|page \d|replace (?:xx|fr|\.fr)|for ?more details|for ?additional|reference the|refer to|prices? |obsolete|visit |www\.|\.com\b|call |contact |net price|list price|msrp|quick ?ship|in stock|effective|shown (?:above|below|with|in)|pictured|conditions|orders will|will apply|terms|receipt of order|thank you|please|we're|we are|our |your )\b`)
+	reBulletJunk   = regexp.MustCompile(`(?i)\b(see page|see pages|page \d|replace (?:xx|fr|\.fr)|for ?more details|for ?additional|reference the|refer to|prices? |obsolete|visit |www\.|\.com\b|call |contact |net price|list price|msrp|quick ?ship|in stock|effective|shown (?:above|below|with|in)|pictured|conditions|orders will|will apply|terms|receipt of order|part number|must order|thank you|please|we're|we are|our |your )\b`)
 	rePronoun      = regexp.MustCompile(`(?i)\b(we|we're|we've|our|you|your|you're|thank you|please|digits?|indicates?|e\.g\.|i\.e\.|ordered|purchase|chart|below|above|following|upgrade only)\b`)
 	reImperative   = regexp.MustCompile(`(?i)^(install|insert|remove|attach|tighten|loosen|apply|place|slide|turn|push|pull|drill|order|add|use|select|specify|replace|see|note|call|contact|check|make|ensure|do not|don't|always|never|simply|these|this|that|those|example|ex|e\.g)\b`)
 	reNonASCII     = regexp.MustCompile("[^\x00-\x7F°]")

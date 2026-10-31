@@ -93,6 +93,20 @@ func TestRules(t *testing.T) {
 			map[string]string{"Flush Volume": "1.28 gpf", "Rough-In": `12"`}, nil},
 		{"dual flush", Input{Brand: "DRV", Room: "bathroom", Category: "Toilets", Block: []string{`0.8/1.28 gpf dual flush`}},
 			map[string]string{"Flush Volume": "0.8 / 1.28 gpf (dual flush)"}, nil},
+		{"designer initials kept, truncated designer dropped", Input{Brand: "DRV", BrandName: "Duravit", Room: "bathroom", Category: "Bathroom Sinks",
+			Block: []string{`Happy D.2 Plus Vessel Sink Design by Studio F. A. Porsche`, `- cUPC listed`}},
+			map[string]string{"Designer": "Studio F. A. Porsche"}, nil},
+		{"truncated designer dropped", Input{Brand: "DRV", BrandName: "Duravit", Room: "bathroom", Category: "Vanities", Block: []string{`ensuring a beautiful and durable fixture Design by Pat Finish BA9056 | 311/2" x 215/8"`}},
+			map[string]string{}, []string{"Designer"}},
+		{"lost decimal flow checked against L/min at two scales", Input{Brand: "BRZ", Room: "bathroom", Category: "Hand Showers", Block: []string{`+ 175 gpm @ 80 psi, 6.6 L/min @ 550 kPa`}},
+			map[string]string{"Flow Rate": "1.75 gpm @ 80 psi"}, nil},
+		{"colon for dash in a fraction", Input{Brand: "CAL", Room: "bathroom", Category: "Bathroom Sink Faucets", Block: []string{`+ 6:3/4" overal height and Rivulet handles`}},
+			map[string]string{"Overall Height": `6-3/4"`}, nil},
+		{"overall height after the number", Input{Brand: "CAL", Room: "bathroom", Category: "Bathroom Sink Faucets", Block: []string{`* 10-1/16" overall height * 5-5/16" spout center to center`}},
+			map[string]string{"Overall Height": `10-1/16"`, "Spout Reach": `5-5/16"`}, nil},
+		{"works with stops at the next product row", Input{Brand: "CAL", Room: "bathroom", Category: "Tub Fillers",
+			Block: []string{`+ for use with StyleTherm, StyleTherm Vista, PB2-R or 2-VR valves D-E4-37 Deluxe Wall Tub Spout`, `« fits most popular cold/filtered water units with`}},
+			map[string]string{"Works With": "StyleTherm, StyleTherm Vista, PB2-R or 2-VR valves; most popular cold/filtered water units"}, nil},
 		{"model number tail is not a dimension", Input{Brand: "CAL", Room: "bathroom", Category: "Faucet Parts", Block: []string{`+ use with flange 9100 (above), 9130-37, 9130-60, 9130-65, 9130-77, 9130-85,`, `for more details, see pages 572-574 THT52D2-R 873`}},
 			map[string]string{}, []string{"Width", "Height", "Depth", "Dimensions"}},
 	}
@@ -137,6 +151,16 @@ func TestCollection(t *testing.T) {
 		{`85/86 Series`, "California Faucets", "85/86 Series"},
 		{`Model`, "Robern", ""},
 		{`M Series Reserve Medicine Cabinets`, "Robern", "M Series"},
+		{`Design by Philippe Starck`, "Duravit", ""},
+		{`ME by Starck Single Hole Horizontal Spray Floorstanding Bidet Design by Philippe Starck`, "Duravit", "ME by Starck"},
+		{`Gooseneck`, "Chicago Faucets", ""},
+		{`Wramszs Iwwrbses Lnvzoase`, "Chicago Faucets", ""},
+		{`Handiefndex CTRREON Canridge`, "Chicago Faucets", ""},
+		{`Pllsse`, "Artelinea USA", ""},
+		{`Numerical Listing`, "Brizo", ""},
+		{`Best Selling Combinations`, "Baldwin", ""},
+		{`Castlron Pg`, "Barclay", ""},
+		{`Schlage Collection`, "Baldwin", "Schlage"},
 	}
 	for _, c := range cases {
 		if got := Collection(c.in, c.brand); got != c.want {
@@ -156,7 +180,7 @@ func TestBullets(t *testing.T) {
 	}
 	got := Bullets(lines, skus, "")
 	want := []string{
-		`Touch-Clean nozzles - swipe away mineral deposits`, `Overall height = 9-1/8", spout outlet to deck = 6", spout reach = 9"`, `Must order rough separately`,
+		`Touch-Clean nozzles - swipe away mineral deposits`, `Overall height = 9-1/8", spout outlet to deck = 6", spout reach = 9"`,
 		`WaterSense labeled hand shower`, `Vitreous china`, `Also available as a wall-hung`, `Rectangular sink made of high quality Duravit ceramic`,
 		`Solid brass construction`, `Polished chrome plated finish`,
 	}
