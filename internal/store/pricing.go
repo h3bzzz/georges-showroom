@@ -150,3 +150,94 @@ func (s *Store) ResetPriceFlags(ctx context.Context, brandCode string) (int64, e
 }
 
 func moneyShort(c int64) string { return fmt.Sprintf("$%d", c/100) }
+
+// BrandMultiplier is the observed fraction of list price George's charges for a brand.
+type BrandMultiplier struct {
+	Code string
+	Name string
+	Mult float64
+	N    int // site SKUs the ratio was read from
+}
+
+// RefreshBrandMultipliers sets brands.price_multiplier from the site's own numbers: every site
+// product carries both George's price and the maker's list price, and their ratio is constant
+// per brand (migration 00035). Brands the site never priced keep their current value.
+func (s *Store) RefreshBrandMultipliers(ctx context.Context) ([]BrandMultiplier, error) {
+	rows, err := s.Pool.Query(ctx, `
+		WITH x AS (
+		  SELECT brand_id, round((percentile_cont(0.5) WITHIN GROUP (ORDER BY price_cents::numeric / msrp_cents))::numeric, 2) AS m, count(*) AS n
+		  FROM products WHERE source = 'site' AND msrp_cents > 0 AND price_cents > 0 GROUP BY brand_id
+		), upd AS (
+		  UPDATE brands b SET price_multiplier = x.m FROM x
+		  WHERE x.brand_id = b.id AND x.m BETWEEN 0.3 AND 1.0 AND b.price_multiplier IS DISTINCT FROM x.m
+		  RETURNING b.id
+		)
+		SELECT COALESCE(b.code,''), b.name, x.m::float8, x.n FROM x JOIN brands b ON b.id = x.brand_id ORDER BY x.n DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BrandMultiplier
+	for rows.Next() {
+		var m BrandMultiplier
+		if err := rows.Scan(&m.Code, &m.Name, &m.Mult, &m.N); err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, rows.Err()
+}
+
+// PurgeJunkSKUs removes price-book lines and the catalog products they created whose "SKU" is
+// a measurement, a standard or a label (ocr.JunkSKU), then drops the catalog families left
+// empty. Products that gathered images, documents or price history are kept. Returns lines
+// and products removed.
+func (s *Store) PurgeJunkSKUs(ctx context.Context, brandCode string, junk func(string) bool) (int64, int64, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT DISTINCT sku FROM (
+		  SELECT i.sku FROM catalog_items i JOIN catalogs c ON c.id = i.catalog_id WHERE $1 = '' OR c.brand_code = $1
+		  UNION
+		  SELECT p.sku FROM products p JOIN brands b ON b.id = p.brand_id WHERE p.source = 'catalog' AND ($1 = '' OR b.code = $1)
+		) x`, brandCode)
+	if err != nil {
+		return 0, 0, err
+	}
+	var bad []string
+	for rows.Next() {
+		var sku string
+		if err := rows.Scan(&sku); err != nil {
+			rows.Close()
+			return 0, 0, err
+		}
+		if junk(sku) {
+			bad = append(bad, sku)
+		}
+	}
+	rows.Close()
+	if len(bad) == 0 {
+		return 0, 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `
+		DELETE FROM catalog_items i USING catalogs c
+		WHERE c.id = i.catalog_id AND ($1 = '' OR c.brand_code = $1) AND i.sku = ANY($2)`, brandCode, bad)
+	if err != nil {
+		return 0, 0, err
+	}
+	lines := tag.RowsAffected()
+	tag, err = s.Pool.Exec(ctx, `
+		DELETE FROM products p USING brands b
+		WHERE b.id = p.brand_id AND p.source = 'catalog' AND ($1 = '' OR b.code = $1) AND p.sku = ANY($2)
+		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.product_id = p.id)
+		  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.product_id = p.id)
+		  AND NOT EXISTS (SELECT 1 FROM price_history h WHERE h.product_id = p.id)`, brandCode, bad)
+	if err != nil {
+		return lines, 0, err
+	}
+	products := tag.RowsAffected()
+	_, err = s.Pool.Exec(ctx, `
+		DELETE FROM product_families f WHERE f.source = 'catalog'
+		  AND NOT EXISTS (SELECT 1 FROM products p WHERE p.family_id = f.id)
+		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.family_id = f.id)
+		  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.family_id = f.id)`)
+	return lines, products, err
+}

@@ -1,7 +1,9 @@
 package ocr
 
 import (
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 
 	"georges_/internal/pricing"
@@ -23,6 +25,7 @@ type Line struct {
 // from an index page, whose "Model No. Page" columns otherwise read as money.
 func Lines(words []Word) []Line {
 	index := IsIndexPage(words)
+	cents := centsStyle(words)
 	ws := make([]Word, 0, len(words))
 	for _, w := range words {
 		if strings.TrimSpace(w.Text) != "" && w.H > 0 {
@@ -65,7 +68,9 @@ func Lines(words []Word) []Line {
 			parts = append(parts, w.Text)
 			// shaky or shape-only reads are kept for Canon.Resolve to repair or drop; a money token
 			// ("610.00") is SKU-shaped too but is never a SKU
-			if !pricing.LooksLikeMoney(w.Text) && (LooksLikeSKU(w.Text) || skuShaped(w.Text)) {
+			// a token in parentheses is a finish code or a cross-reference ("(US10B)", "(85354),"),
+			// never the line's own model
+			if !pricing.LooksLikeMoney(w.Text) && !IsReference(w.Text) && (LooksLikeSKU(w.Text) || skuShaped(w.Text)) {
 				ln.SKUs = append(ln.SKUs, w)
 			}
 		}
@@ -74,7 +79,7 @@ func Lines(words []Word) []Line {
 		}
 		ln.Text = strings.Join(parts, " ")
 		if !index {
-			ln.PriceCents = linePrice(r, ln.SKUs)
+			ln.PriceCents = linePrice(r, ln.SKUs, cents)
 		}
 		out = append(out, ln)
 	}
@@ -103,11 +108,12 @@ func abs(n int) int {
 // Brizo use all-digit model numbers), and a row that is a run of SKUs with no description is
 // an index or cross-reference row, which carries no price at all.
 //
-// Two printed forms need help: a dollar sign OCR'd as its own word ("$ 1,787.00", Aboutwater,
-// Hydro Systems) is glued back on; and a whole-dollar price with no sign or cents ("… polished
+// Three printed forms need help: a dollar sign OCR'd as its own word ("$ 1,787.00", Aboutwater,
+// Hydro Systems) is glued back on; a whole-dollar price with no sign or cents ("… polished
 // chrome 1095", California Faucets) is accepted only as the last token of a row that carries a
-// prose description after its SKU.
-func linePrice(row []Word, skus []Word) int64 {
+// prose description after its SKU; and on a page whose prices carry cents, a dollar token
+// without a point ("$22800", "$1495", "$4,93500") has lost its point to OCR and reads as cents.
+func linePrice(row []Word, skus []Word, cents bool) int64 {
 	isSKU := map[string]bool{}
 	for _, k := range skus {
 		isSKU[k.Text] = true
@@ -120,6 +126,11 @@ func linePrice(row []Word, skus []Word) int64 {
 		t := w.Text
 		if i > 0 && strings.Trim(row[i-1].Text, " ") == "$" {
 			t = "$" + t
+		}
+		if cents {
+			if c, ok := droppedPoint(t); ok {
+				return c
+			}
 		}
 		c, ok := pricing.ParseCents(t)
 		if !ok {
@@ -156,6 +167,53 @@ func linePrice(row []Word, skus []Word) int64 {
 	}
 	c, _ := pricing.ParseBareDollars(last.Text)
 	return c
+}
+
+// reDroppedPoint: a dollar amount of four to seven digits with no decimal point, commas allowed
+// where they may have survived ("$22800", "$4,93500", "$170700")
+var reDroppedPoint = regexp.MustCompile(`^\$\s?(\d[\d,]{2,7}\d)$`)
+
+// droppedPoint reads "$22800" as $228.00: on a page printed with cents, a signed amount without
+// a point is one whose point tesseract dropped (Chicago Faucets "$41257" beside "$436.38",
+// Aboutwater "$30000" beside "$ 300.00", Alno "$12995" in a row of "$129.95"s).
+func droppedPoint(tok string) (int64, bool) {
+	t := strings.Trim(strings.TrimSpace(tok), "*†‡,;:")
+	m := reDroppedPoint.FindStringSubmatch(t)
+	if m == nil {
+		return 0, false
+	}
+	digits := strings.ReplaceAll(m[1], ",", "")
+	if len(digits) < 4 || len(digits) > 8 {
+		return 0, false
+	}
+	v, err := strconv.ParseInt(digits, 10, 64)
+	if err != nil || v < pricing.MinCents || v > pricing.MaxCents {
+		return 0, false
+	}
+	return v, true
+}
+
+// reCentsTok: a money token printed with cents, "$1,787.00" / "327.50"
+var reCentsTok = regexp.MustCompile(`^\$?\s?\d{1,3}(,\d{3})*\.\d{2}$`)
+
+// centsStyle reports whether a page prints its prices with cents: at least three such tokens,
+// outnumbering the signed whole-dollar amounts ("$704", "$1,011") two to one. Emtek and Baldwin
+// pages print whole dollars only, and there "$1492" is $1,492, not $14.92.
+func centsStyle(words []Word) bool {
+	withCents, whole := 0, 0
+	for i, w := range words {
+		t := strings.Trim(w.Text, "*†‡,;:")
+		if i > 0 && strings.TrimSpace(words[i-1].Text) == "$" {
+			t = "$" + t
+		}
+		switch {
+		case reCentsTok.MatchString(t):
+			withCents++
+		case strings.HasPrefix(t, "$") && pricing.LooksLikeMoney(t):
+			whole++
+		}
+	}
+	return withCents >= 3 && withCents >= 2*whole
 }
 
 // IsIndexPage recognises a numerical / alphabetical index or cross-reference page: the word

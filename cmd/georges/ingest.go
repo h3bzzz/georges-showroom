@@ -251,6 +251,15 @@ func ingestCmd() *cobra.Command {
 				fmt.Printf("price flags cleared: %d (prices come back from the price books below)\n", n)
 			}
 			if !prAudit {
+				if ms, err := st.RefreshBrandMultipliers(ctx); err != nil {
+					return err
+				} else if len(ms) > 0 {
+					fmt.Print("brand multipliers from the site (price / list):")
+					for _, m := range ms {
+						fmt.Printf(" %s %.2f (%d)", m.Code, m.Mult, m.N)
+					}
+					fmt.Println()
+				}
 				cleared, err := st.RevalidateItemPrices(ctx, prBrand)
 				if err != nil {
 					return err

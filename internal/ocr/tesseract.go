@@ -115,8 +115,8 @@ func LooksLikeSKU(t string) bool {
 	if digits < 2 {
 		return false
 	}
-	if strings.ContainsAny(t, "$\"°%") || reFraction.MatchString(t) || reDimension.MatchString(t) {
-		return false // prices, inches, angles, 7-15/16 style dimensions, 57MM
+	if strings.ContainsAny(t, "$\"°%") || reFraction.MatchString(t) || reDimension.MatchString(t) || JunkSKU(t) {
+		return false // prices, inches, angles, 7-15/16 style dimensions, 57MM, flow rates, standards
 	}
 	// pure article numbers (Gessi 37231, Kohler 12345) are 5–8 digits; shorter digit runs are
 	// finish codes, page numbers or years.

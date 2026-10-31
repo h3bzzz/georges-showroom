@@ -1,6 +1,9 @@
 package ocr
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestIsIndexPage(t *testing.T) {
 	var words []Word
@@ -68,6 +71,37 @@ func TestIsIndexPage(t *testing.T) {
 	pageRef := []Word{{Text: "THT52-R", X: 10, Y: 10, W: 60, H: 12}, {Text: "693", X: 400, Y: 10, W: 40, H: 12}}
 	if ln := Lines(pageRef); len(ln) != 1 || ln[0].PriceCents != 0 {
 		t.Errorf("bare number without a description must not be a price: %+v", ln)
+	}
+	// a page printed with cents: a signed amount with no point has lost it to OCR
+	var cents []Word
+	for i := 0; i < 4; i++ {
+		y := 100 + i*20
+		cents = append(cents, Word{Text: "W036U", X: 10, Y: y, W: 60, H: 12}, Word{Text: "Chrome", X: 100, Y: y, W: 50, H: 12}, Word{Text: "9102", X: 160, Y: y, W: 40, H: 12}, Word{Text: "$", X: 300, Y: y, W: 10, H: 12}, Word{Text: "200.00", X: 320, Y: y, W: 50, H: 12})
+	}
+	cents = append(cents,
+		Word{Text: "A713BUCX", X: 10, Y: 200, W: 60, H: 12}, Word{Text: "Brushed", X: 100, Y: 200, W: 50, H: 12}, Word{Text: "$22800", X: 300, Y: 200, W: 50, H: 12},
+		Word{Text: "ML6454", X: 10, Y: 220, W: 60, H: 12}, Word{Text: "Mixer", X: 100, Y: 220, W: 50, H: 12}, Word{Text: "$4,93500", X: 300, Y: 220, W: 50, H: 12},
+		Word{Text: "AT040", X: 10, Y: 240, W: 60, H: 12}, Word{Text: "Towel", X: 100, Y: 240, W: 50, H: 12}, Word{Text: "Ring", X: 160, Y: 240, W: 50, H: 12}, Word{Text: "$7495", X: 300, Y: 240, W: 50, H: 12}, Word{Text: "$89.95", X: 360, Y: 240, W: 50, H: 12})
+	want := map[string]int64{"W036U": 20000, "A713BUCX": 22800, "ML6454": 493500, "AT040": 7495}
+	for _, ln := range Lines(cents) {
+		if w, ok := want[ln.SKUs[0].Text]; ok && ln.PriceCents != w {
+			t.Errorf("cents-style page: %s read %d, want %d (%s)", ln.SKUs[0].Text, ln.PriceCents, w, ln.Text)
+		}
+	}
+	// the same amount on a whole-dollar page (Emtek) is whole dollars
+	whole := []Word{{Text: "451211", X: 10, Y: 10, W: 60, H: 12}, {Text: "Single", X: 100, Y: 10, W: 50, H: 12}, {Text: "Cylinder", X: 160, Y: 10, W: 50, H: 12}, {Text: "$1492", X: 300, Y: 10, W: 50, H: 12},
+		{Text: "451332", X: 10, Y: 30, W: 60, H: 12}, {Text: "Dummy", X: 100, Y: 30, W: 50, H: 12}, {Text: "$878", X: 300, Y: 30, W: 50, H: 12}}
+	if ln := Lines(whole); len(ln) != 2 || ln[0].PriceCents != 149200 || ln[1].PriceCents != 87800 {
+		t.Errorf("whole-dollar page: %+v", ln)
+	}
+	// a parenthesised finish code or cross-reference is not the line's SKU, so it takes no price
+	ref := []Word{{Text: "5057", X: 10, Y: 10, W: 40, H: 12}, {Text: "Octagon", X: 60, Y: 10, W: 50, H: 12}, {Text: "Knob", X: 120, Y: 10, W: 40, H: 12}, {Text: "Satin", X: 170, Y: 10, W: 40, H: 12}, {Text: "Nickel", X: 220, Y: 10, W: 40, H: 12}, {Text: "(US15)", X: 270, Y: 10, W: 40, H: 12}, {Text: "$240", X: 320, Y: 10, W: 40, H: 12}}
+	for _, ln := range Lines(ref) {
+		for _, k := range ln.SKUs {
+			if strings.Contains(k.Text, "US15") {
+				t.Errorf("parenthesised finish code taken as a SKU: %+v", ln)
+			}
+		}
 	}
 	// a SKU that is all digits is never the price, and page references are not money
 	row := []Word{{Text: "20099", X: 10, Y: 10, W: 40, H: 12}, {Text: "46189_73628", X: 60, Y: 10, W: 80, H: 12}, {Text: "DIAMANTATO", X: 150, Y: 10, W: 80, H: 12}}

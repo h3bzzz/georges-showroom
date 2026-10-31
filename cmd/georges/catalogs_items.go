@@ -59,7 +59,7 @@ func catalogsItemsCmd() *cobra.Command {
 				for _, ln := range ocr.Lines(words) {
 					for _, k := range ln.SKUs {
 						sku, ok := canon.Resolve(p.Page, k)
-						if !ok {
+						if !ok || ocr.JunkSKU(sku) {
 							continue
 						}
 						rows = append(rows, store.ItemRow{CatalogID: p.CatalogID, Page: p.Page, SKU: sku, Line: ln.Text, PriceCents: ln.PriceCents, X: k.X, Y: k.Y})
@@ -72,6 +72,11 @@ func catalogsItemsCmd() *cobra.Command {
 				lines += len(rows)
 			}
 			fmt.Printf("items: %d pages scanned, %d SKU lines\n", total, lines)
+			if jl, jp, err := st.PurgeJunkSKUs(cmd.Context(), brand, ocr.JunkSKU); err != nil {
+				return err
+			} else if jl+jp > 0 {
+				fmt.Printf("purged %d junk-SKU lines and %d products (flow rates, standards, labels)\n", jl, jp)
+			}
 			n, err := st.ProductsFromCatalogs(cmd.Context(), brand)
 			if err != nil {
 				return err
