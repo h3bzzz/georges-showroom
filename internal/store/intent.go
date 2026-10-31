@@ -196,6 +196,8 @@ func ParseIntent(q string, brands map[string]string) Intent {
 			lq = strings.TrimSpace(strings.Replace(" "+lq+" ", " "+n+" ", " ", 1))
 		}
 	}
+	// brand names typed with different spacing: "la cava" → lacava, "topknobs" → top knobs
+	lq = strings.Join(mergeBrandWords(strings.Fields(lq), brands, &in), " ")
 	words := strings.Fields(lq)
 	for i := 0; i < len(words); i++ {
 		w := strings.Trim(words[i], "-–—.:;()")
@@ -414,6 +416,55 @@ func (in Intent) relevance(args *[]any) string {
 		return "0"
 	}
 	return strings.Join(terms, " + ")
+}
+
+// mergeBrandWords matches brand names whose spacing differs from the query: two or three
+// adjacent words whose concatenation is a brand key ("la cava", "sub zero"), or one word that
+// equals a multi-word brand name with its spaces removed ("topknobs"). Matched words are
+// removed and the brand recorded on in.
+func mergeBrandWords(words []string, brands map[string]string, in *Intent) []string {
+	if len(brands) == 0 {
+		return words
+	}
+	var compact map[string]string // "topknobs" → "top knobs"
+	for n := range brands {
+		if strings.Contains(n, " ") {
+			if compact == nil {
+				compact = map[string]string{}
+			}
+			compact[strings.ReplaceAll(n, " ", "")] = n
+		}
+	}
+	var out []string
+	for i := 0; i < len(words); i++ {
+		matched := false
+		for span := 3; span >= 2; span-- {
+			if i+span > len(words) {
+				continue
+			}
+			joined := strings.Join(words[i:i+span], "")
+			if len(joined) < 5 {
+				continue
+			}
+			if slug, ok := brands[joined]; ok {
+				in.Brands = append(in.Brands, slug)
+				in.Labels = append(in.Labels, joined)
+				i += span - 1
+				matched = true
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		if n, ok := compact[words[i]]; ok && len(words[i]) >= 5 {
+			in.Brands = append(in.Brands, brands[n])
+			in.Labels = append(in.Labels, n)
+			continue
+		}
+		out = append(out, words[i])
+	}
+	return out
 }
 
 // brand name → slug map, cached for five minutes
