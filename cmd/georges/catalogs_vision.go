@@ -27,7 +27,7 @@ import (
 func catalogsVisionCmd() *cobra.Command {
 	var brand, model, labels string
 	var limit, threads int
-	var all, dry, eval, reclassify bool
+	var all, dry, eval, reclassify, spec bool
 	var mix float32
 	var show []string
 	cmd := &cobra.Command{
@@ -110,6 +110,11 @@ func catalogsVisionCmd() *cobra.Command {
 				sj, ss, _ := subject.Classify(emb)
 				return store.CropVision{ID: id, Kind: k, Score: ks, Subject: sj, SubScore: ss}
 			}
+			// --spec: the same pipeline over spec-sheet images (product_images source='spec')
+			listRefs, saveVision, streamEmb := st.CropsToEmbed, st.SaveCropVision, st.CropEmbeddings
+			if spec {
+				listRefs, saveVision, streamEmb = st.SpecImagesToEmbed, st.SaveImageVision, st.ImageEmbeddings
+			}
 			start := time.Now()
 			counts := map[string]int{}
 			if reclassify {
@@ -121,11 +126,11 @@ func catalogsVisionCmd() *cobra.Command {
 						pending = pending[:0]
 						return nil
 					}
-					err := st.SaveCropVision(ctx, enc.Model, pending)
+					err := saveVision(ctx, enc.Model, pending)
 					pending = pending[:0]
 					return err
 				}
-				err := st.CropEmbeddings(ctx, brand, enc.Model, func(e store.CropEmbedding) error {
+				err := streamEmb(ctx, brand, enc.Model, func(e store.CropEmbedding) error {
 					v := classify(e.ID, e.Emb)
 					counts[v.Kind]++
 					pending = append(pending, v)
@@ -143,11 +148,11 @@ func catalogsVisionCmd() *cobra.Command {
 				}
 				fmt.Printf("reclassified %d crops in %s: %v\n", n, time.Since(start).Round(time.Second), counts)
 			} else {
-				crops, err := st.CropsToEmbed(ctx, brand, enc.Model, all, limit)
+				crops, err := listRefs(ctx, brand, enc.Model, all, limit)
 				if err != nil {
 					return err
 				}
-				fmt.Printf("%d crops to embed with %s\n", len(crops), enc.Model)
+				fmt.Printf("%d images to embed with %s\n", len(crops), enc.Model)
 				// decode + pad in parallel, run the model in order, write in batches
 				type loaded struct {
 					ref store.CropRef
@@ -207,7 +212,7 @@ func catalogsVisionCmd() *cobra.Command {
 					}
 					batch = batch[:0]
 					if len(pending) >= 256 && !dry {
-						if err := st.SaveCropVision(ctx, enc.Model, pending); err != nil {
+						if err := saveVision(ctx, enc.Model, pending); err != nil {
 							return err
 						}
 						pending = pending[:0]
@@ -236,7 +241,7 @@ func catalogsVisionCmd() *cobra.Command {
 					return err
 				}
 				if len(pending) > 0 && !dry {
-					if err := st.SaveCropVision(ctx, enc.Model, pending); err != nil {
+					if err := saveVision(ctx, enc.Model, pending); err != nil {
 						return err
 					}
 				}
@@ -245,15 +250,17 @@ func catalogsVisionCmd() *cobra.Command {
 			if dry {
 				return nil
 			}
-			changed, err := st.RecomputeCropKinds(ctx)
-			if err != nil {
-				return err
+			if !spec {
+				changed, err := st.RecomputeCropKinds(ctx)
+				if err != nil {
+					return err
+				}
+				kinds, _, embedded, err := st.VisionStats(ctx)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("effective kinds: %v (%d crops carry a vision verdict, %d kinds changed)\n", kinds, embedded, changed)
 			}
-			kinds, _, embedded, err := st.VisionStats(ctx)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("effective kinds: %v (%d crops carry a vision verdict, %d kinds changed)\n", kinds, embedded, changed)
 			fmt.Println("re-picking family photos…")
 			if err := st.RefreshFamilyBest(ctx); err != nil {
 				return err
@@ -272,6 +279,7 @@ func catalogsVisionCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dry, "dry", false, "print verdicts, write nothing")
 	cmd.Flags().BoolVar(&eval, "eval", false, "leave-one-out accuracy on --labels; write nothing")
 	cmd.Flags().BoolVar(&reclassify, "reclassify", false, "re-score stored embeddings with the current prompts; no image work")
+	cmd.Flags().BoolVar(&spec, "spec", false, "classify spec-sheet images (product_images source='spec') instead of catalog crops")
 	cmd.Flags().StringSliceVar(&show, "show", nil, "classify these image files and print the top classes")
 	return cmd
 }

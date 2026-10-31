@@ -175,6 +175,10 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    -- never stands for a faucet, a tub never for a sink (migration 00029); the probe is ~89%
 		    -- precise at 0.7 on the labelled set
 		    AND (cc.vsubject IS NULL OR COALESCE(cc.vsubscore,0) < 0.7 OR subject_fits(cc.vsubject, pf.category_path))
+		    -- a swatch, a logo, a person, a mood board: the model needs only mild confidence to
+		    -- keep these off a card (an audit of 15k cards found it right at 0.4 / 0.5)
+		    AND NOT (cc.vkind IN ('text','other') AND COALESCE(cc.vscore,0) >= 0.4)
+		    AND NOT (cc.vsubject = 'other' AND COALESCE(cc.vsubscore,0) >= 0.5)
 		    -- a detail shot or icon is never the card photo: a product crop on a 1700×2200 page is at
 		    -- least ~150 px on its long side and ~80 px on its short side (a tidied tall faucet is 108×177)
 		    AND ((cc.kind <> 'photo' AND (cc.vkind IS DISTINCT FROM 'photo' OR COALESCE(cc.quality,0) < 0.2)) OR (GREATEST(cc.w,cc.h) >= 150 AND LEAST(cc.w,cc.h) >= 80 AND cc.w*cc.h >= 12000))
@@ -193,15 +197,42 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// spec-sheet photo: a vendor's spec PDF often carries the product photograph itself
+	// (Watermark, Emtek). One the vision model is sure is a photo whose subject suits the family
+	// replaces a small or poor catalog crop, and gives a picture to a family that had none; a
+	// vendor master still wins.
+	_, err = s.Pool.Exec(ctx, `
+		WITH spec AS (
+		  SELECT DISTINCT ON (i.family_id) i.family_id, i.path, i.width
+		  FROM product_images i JOIN product_families pf ON pf.id=i.family_id
+		  WHERE i.source='spec' AND i.path IS NOT NULL AND i.vkind='photo' AND COALESCE(i.vscore,0) >= 0.8
+		    AND COALESCE(i.width,0) >= 300 AND COALESCE(i.height,0) >= 200
+		    AND (i.vsubject IS NULL OR COALESCE(i.vsubscore,0) < 0.7 OR subject_fits(i.vsubject, pf.category_path))
+		    AND NOT (i.vsubject = 'other' AND COALESCE(i.vsubscore,0) >= 0.5)
+		  ORDER BY i.family_id, i.vscore DESC, i.width*i.height DESC
+		)
+		UPDATE family_best fb SET photo_path=spec.path, photo_w=spec.width, photo_how='spec', updated_at=now()
+		FROM spec
+		LEFT JOIN family_best cur ON cur.family_id=spec.family_id
+		LEFT JOIN catalog_crops cc ON cur.photo_path IS NOT NULL AND (cc.path=cur.photo_path OR cc.hd_path=cur.photo_path)
+		WHERE fb.family_id=spec.family_id AND fb.web_path IS NULL
+		  AND (fb.photo_path IS NULL OR cc.w < 300 OR COALESCE(cc.quality,0) < 0.3)`)
+	if err != nil {
+		return err
+	}
 	// series photo: a price book opens each collection with a photograph a few pages before its
 	// tables (Robern: the M Series room shot, then pages of cabinet drawings and SKUs). A family
 	// with no picture of its own, whose SKU is printed on a page, takes the nearest such opener
 	// above it: a page in the same book, at most four pages back, with one or two photographs,
-	// whose subject (when the vision model is sure) suits the family's category.
+	// that the vision model reads as a photograph (not a mood board, a swatch or a dimensioned
+	// drawing), whose subject (when the model is sure) suits the family's category. A part or a
+	// rough-in (tier 2, or a parts category) never borrows the collection shot: a drain is not
+	// a sink and a cartridge is not a faucet.
 	_, err = s.Pool.Exec(ctx, `
 		WITH placed AS (
 		  SELECT fb.family_id, fb.page_catalog AS catalog_id, fb.page_no AS page
-		  FROM family_best fb WHERE fb.photo_path IS NULL AND fb.web_path IS NULL AND fb.page_catalog IS NOT NULL
+		  FROM family_best fb JOIN product_families pf ON pf.id=fb.family_id
+		  WHERE fb.photo_path IS NULL AND fb.web_path IS NULL AND fb.page_catalog IS NOT NULL AND series_ok(pf.tier, pf.category_path)
 		  UNION
 		  (SELECT DISTINCT ON (p.family_id) p.family_id, k.catalog_id, k.page
 		   FROM family_best fb
@@ -209,12 +240,15 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		   JOIN brands b ON b.id=p.brand_id
 		   JOIN catalogs c ON c.brand_code=b.code
 		   JOIN catalog_skus k ON k.catalog_id=c.id AND k.sku=p.sku
-		   WHERE fb.photo_path IS NULL AND fb.web_path IS NULL AND fb.page_catalog IS NULL
+		   JOIN product_families pf ON pf.id=fb.family_id
+		   WHERE fb.photo_path IS NULL AND fb.web_path IS NULL AND fb.page_catalog IS NULL AND series_ok(pf.tier, pf.category_path)
 		   ORDER BY p.family_id, k.catalog_id, k.page)
 		), openers AS (
 		  SELECT cc.catalog_id, cc.page, cc.id, COALESCE(cc.hd_path,cc.path) AS path, COALESCE(cc.hd_w,cc.w) AS w, cc.w*cc.h AS area, cc.vsubject, cc.vsubscore
 		  FROM catalog_crops cc
 		  WHERE (cc.kind='photo' OR (cc.vkind='photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2)) AND cc.w >= 300 AND cc.h >= 200
+		    AND (cc.vkind IS NULL OR cc.vkind = 'photo')
+		    AND NOT (cc.vsubject = 'other' AND COALESCE(cc.vsubscore,0) >= 0.5)
 		    AND (SELECT count(*) FROM catalog_crops o WHERE o.catalog_id=cc.catalog_id AND o.page=cc.page AND o.kind='photo') <= 2
 		), pick AS (
 		  SELECT DISTINCT ON (pl.family_id) pl.family_id, o.path, o.w

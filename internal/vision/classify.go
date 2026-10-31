@@ -104,7 +104,14 @@ func buildSubject() []Class {
 			"a door lever on a round rose", "a door knob", "a door handleset with a long plate", "a deadbolt",
 			"a door hinge", "a strike plate", "a door knocker", "a door lever on a square rose")},
 		{Name: "appliance", Prompts: both("a range hood", "a cooktop", "an oven", "a refrigerator", "a dishwasher", "a kitchen range")},
-		{Name: "other", Prompts: []string{"a photo of a person", "a logo", "a tile sample", "an abstract shape", "printed text", "a blank image"}},
+		// Buster + Punch sells lighting and switch plates beside its hardware; without these two
+		// classes every pendant and socket read as "other" and was refused for every family
+		{Name: "lighting", Prompts: both("a pendant lamp hanging from a cord", "a wall sconce", "a ceiling light", "a decorative light bulb",
+			"a chandelier", "a table lamp", "three pendant lights in a row", "a brass pendant light with a glass globe")},
+		{Name: "electrical", Prompts: both("a light switch plate", "an electrical socket", "a dimmer switch on a metal plate", "a toggle switch",
+			"a wall plate with USB sockets")},
+		{Name: "other", Prompts: []string{"a photo of a person", "a logo", "a tile sample", "an abstract shape", "printed text", "a blank image",
+			"a t-shirt", "a hoodie", "a bottle of soap", "a necklace", "a wood sample", "a mood board of material samples"}},
 	}
 }
 

@@ -1,4 +1,4 @@
-# path	medium	subject  (medium: photo|detail|spec|drawing|text|other; subject: faucet|handle|trim|valve|shower|sink|tub|toilet|part|accessory|cabinet|doorware|appliance|other)
+# path	medium	subject  (medium: photo|detail|spec|drawing|text|other; subject: faucet|handle|trim|valve|shower|sink|tub|toilet|part|accessory|cabinet|doorware|appliance|lighting|electrical|other)
 crops/WAT/BOG_2024PriceBook/0054_01.jpg	spec	faucet
 crops/GES/GES_Bathroom_Collection/0182_07.jpg	photo	faucet
 crops/BAR/2023BathtubsTubKits/0227_00.jpg	photo	tub
@@ -822,3 +822,26 @@ crops/ALN/ALN_2026_Bath_catalog_reduced/0031_11.jpg	photo	part
 crops/ABW/ABW_2024Pricelist/0162_05.jpg	photo	faucet
 crops/ART/ART_2025Pricebook/0067_01.jpg	photo	valve
 crops/ABW/ABW_2024Pricelist/0122_01.jpg	drawing	part
+crops/BPN/2022_Catalog_2023Edit/0061_02.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0066_05.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0065_04.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0064_00.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0060_00.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0062_02.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0058_04.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0067_09.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0064_01.jpg	photo	lighting
+crops/BPN/2022_Catalog_2023Edit/0038_02.jpg	photo	electrical
+crops/BPN/2022_Catalog_2023Edit/0036_01.jpg	photo	electrical
+crops/BPN/2022_Catalog_2023Edit/0032_01.jpg	photo	electrical
+crops/BPN/2022_Catalog_2023Edit/0115_03.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0108_00.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0115_02.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0115_05.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0077_06.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0077_04.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0092_02.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0038_09.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0042_01.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0114_03.jpg	photo	other
+crops/BPN/2022_Catalog_2023Edit/0115_01.jpg	photo	other

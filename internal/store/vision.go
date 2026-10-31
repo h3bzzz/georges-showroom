@@ -158,3 +158,68 @@ func DecodeEmbedding(b []byte) []float32 {
 	}
 	return v
 }
+
+// SpecImagesToEmbed lists spec-sheet images (product_images source='spec') without an
+// embedding from this model (or all of them). They are classified exactly like catalog crops
+// so RefreshFamilyBest can let a true product photograph among them stand as a card photo.
+func (s *Store) SpecImagesToEmbed(ctx context.Context, brand, model string, all bool, limit int) ([]CropRef, error) {
+	q := `SELECT i.id, i.path FROM product_images i
+		LEFT JOIN product_families f ON f.id=i.family_id LEFT JOIN brands b ON b.id=f.brand_id
+		WHERE i.source='spec' AND i.path IS NOT NULL AND ($1='' OR b.code=$1) AND ($2 OR i.vemb IS NULL OR i.vmodel IS DISTINCT FROM $3)
+		ORDER BY i.family_id, i.id`
+	if limit > 0 {
+		q += fmt.Sprintf(" LIMIT %d", limit)
+	}
+	rows, err := s.Pool.Query(ctx, q, brand, all, model)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []CropRef
+	for rows.Next() {
+		var c CropRef
+		if err := rows.Scan(&c.ID, &c.Path); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// SaveImageVision stores verdicts for product_images rows (spec-sheet images).
+func (s *Store) SaveImageVision(ctx context.Context, model string, rows []CropVision) error {
+	b := &pgx.Batch{}
+	for _, r := range rows {
+		if r.Emb != nil {
+			b.Queue(`UPDATE product_images SET vemb=$2, vmodel=$3, vkind=$4, vscore=$5, vsubject=$6, vsubscore=$7 WHERE id=$1`,
+				r.ID, EncodeEmbedding(r.Emb), model, r.Kind, r.Score, r.Subject, r.SubScore)
+		} else {
+			b.Queue(`UPDATE product_images SET vkind=$2, vscore=$3, vsubject=$4, vsubscore=$5 WHERE id=$1`,
+				r.ID, r.Kind, r.Score, r.Subject, r.SubScore)
+		}
+	}
+	return s.Pool.SendBatch(ctx, b).Close()
+}
+
+// ImageEmbeddings streams stored spec-image embeddings for a model to fn (reclassify).
+func (s *Store) ImageEmbeddings(ctx context.Context, brand, model string, fn func(CropEmbedding) error) error {
+	rows, err := s.Pool.Query(ctx, `SELECT i.id, i.path, i.vemb FROM product_images i
+		LEFT JOIN product_families f ON f.id=i.family_id LEFT JOIN brands b ON b.id=f.brand_id
+		WHERE i.source='spec' AND i.vemb IS NOT NULL AND i.vmodel=$2 AND ($1='' OR b.code=$1) ORDER BY i.id`, brand, model)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var e CropEmbedding
+		var raw []byte
+		if err := rows.Scan(&e.ID, &e.Path, &raw); err != nil {
+			return err
+		}
+		e.Emb = DecodeEmbedding(raw)
+		if err := fn(e); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
