@@ -30,10 +30,13 @@ func (s *Store) ReplaceTOC(ctx context.Context, catalogID int, entries []TOCEntr
 	return tx.Commit(ctx)
 }
 
+// TOC returns the book's contents: its printed index when that parsed to at least five
+// entries, otherwise whichever source found more.
 func (s *Store) TOC(ctx context.Context, catalogID int) ([]TOCEntry, error) {
 	rows, err := s.Pool.Query(ctx, `
+		WITH n AS (SELECT source, count(*) AS c FROM catalog_toc WHERE catalog_id=$1 GROUP BY source)
 		SELECT page, title, level FROM catalog_toc WHERE catalog_id=$1
-		  AND source = (SELECT CASE WHEN EXISTS (SELECT 1 FROM catalog_toc t WHERE t.catalog_id=$1 AND t.source='printed') THEN 'printed' ELSE 'ocr' END)
+		  AND source = (SELECT source FROM n ORDER BY (source='printed' AND c >= 5) DESC, c DESC LIMIT 1)
 		ORDER BY page, level`, catalogID)
 	if err != nil {
 		return nil, err
@@ -120,8 +123,7 @@ func (s *Store) CatalogGroups(ctx context.Context) ([]CatalogGroup, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT c.id, c.brand_code, c.name, COALESCE(c.title,''), COALESCE(c.pages,0), COALESCE(c.has_text,false), COALESCE(c.fetched_at,'epoch'::timestamptz),
 		  COALESCE(b.name, c.brand_code), COALESCE(b.slug,''), COALESCE(b.logo,''),
-		  (SELECT count(*) FROM catalog_toc t WHERE t.catalog_id=c.id
-		     AND t.source = CASE WHEN EXISTS (SELECT 1 FROM catalog_toc x WHERE x.catalog_id=c.id AND x.source='printed') THEN 'printed' ELSE 'ocr' END),
+		  COALESCE((SELECT max(x.c) FROM (SELECT count(*) AS c FROM catalog_toc t WHERE t.catalog_id=c.id GROUP BY t.source) x), 0),
 		  (SELECT count(*) FROM catalog_pages p WHERE p.catalog_id=c.id AND p.ocr_at IS NOT NULL)
 		FROM catalogs c LEFT JOIN brands b ON b.code=c.brand_code
 		ORDER BY COALESCE(b.name, c.brand_code), c.brand_code, c.name`)
