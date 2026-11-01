@@ -393,9 +393,14 @@ templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, i
 	}
 }
 
-templ SearchResults(q string, fams []store.FamilyRow, total int, hits []store.CatalogHit) {
-	if len(fams) == 0 && len(hits) == 0 {
-		<div class="rounded-md bg-white border shadow p-3 text-sm text-neutral-500">No matches for “{ q }”</div>
+templ SearchResults(q string, fams []store.FamilyRow, total int, hits []store.CatalogHit, skuHits []store.CatalogHit, skuURL string) {
+	if len(fams) == 0 && len(hits) == 0 && len(skuHits) == 0 {
+		<div class="rounded-md bg-white border shadow p-3 text-sm text-neutral-500">
+			No matches for “{ q }”
+			if skuURL != "" {
+				<a href={ templ.SafeURL(skuURL) } class="block mt-1 hover:underline" style="color:var(--accent)">Look up SKU { q } across the catalogs ›</a>
+			}
+		</div>
 	} else {
 		<div class="rounded-md bg-white border shadow divide-y text-sm max-h-[70vh] overflow-auto">
 			for _, f := range fams {
@@ -411,41 +416,76 @@ templ SearchResults(q string, fams []store.FamilyRow, total int, hits []store.Ca
 			if total > len(fams) {
 				<a href={ templ.SafeURL("/shop?q=" + q) } class="block p-2 hover:underline" style="color:var(--accent)">See all { Itoa(total) } results ›</a>
 			}
+			for _, h := range skuHits {
+				<a href={ templ.SafeURL("/catalog/" + Itoa(h.CatalogID) + "?p=" + Itoa(h.Page)) } class="block p-2 hover:bg-neutral-50">
+					<div class="text-xs uppercase text-neutral-500">{ h.BrandCode } catalog · { h.Title } · p.{ Itoa(h.Page) }</div>
+					<div class="font-mono text-xs text-neutral-700 truncate">{ h.Snippet }</div>
+				</a>
+			}
 			for _, h := range hits {
 				<a href={ templ.SafeURL("/catalog/" + Itoa(h.CatalogID) + "?p=" + Itoa(h.Page)) } class="block p-2 hover:bg-neutral-50">
 					<div class="text-xs uppercase text-neutral-500">{ h.BrandCode } catalog · { h.Title } · p.{ Itoa(h.Page) }</div>
 					<div class="text-neutral-700">@templ.Raw(h.Snippet)</div>
 				</a>
 			}
+			if skuURL != "" && len(fams) == 0 {
+				<a href={ templ.SafeURL(skuURL) } class="block p-2 hover:underline" style="color:var(--accent)">Everything for SKU { q } ›</a>
+			}
 		</div>
 	}
 }
 
-templ Catalogs(rows []store.CatalogRow) {
+templ Catalogs(groups []store.CatalogGroup) {
 	@Layout("Vendor catalogs") {
-		<h1 class="text-2xl font-semibold mb-4">Vendor catalogs &amp; price books <span class="text-sm text-neutral-500 font-normal">({ Itoa(len(rows)) })</span></h1>
-		<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
-			for _, c := range rows {
-				<a href={ templ.SafeURL("/catalog/" + Itoa(c.ID)) } class="rounded-lg bg-white border border-neutral-200 overflow-hidden hover:border-sky-500">
-					<img src={ "/catalog/" + Itoa(c.ID) + "/thumb" } class="w-full aspect-[3/4] object-cover bg-neutral-100" loading="lazy" onerror="this.style.visibility='hidden'"/>
-					<div class="p-2 text-xs">
-						<div class="uppercase text-neutral-500">{ c.BrandCode }</div>
-						<div class="font-medium leading-snug line-clamp-2">
-							if c.Title != "" {
-								{ c.Title }
-							} else {
-								{ c.Name }
-							}
-						</div>
-						<div class="text-neutral-400">{ Itoa(c.Pages) } pages
-							if c.HasText {
-								· searchable
-							}
-						</div>
-					</div>
-				</a>
+		<div class="eyebrow">Library</div>
+		<h1 class="font-display text-3xl mb-3" style="font-weight:500">Vendor catalogs &amp; price books</h1>
+		<p class="text-sm mb-4" style="color:var(--nickel)">Every book is read page by page; a book's contents appear in its reader as soon as it is indexed.</p>
+		<nav class="flex flex-wrap gap-x-3 gap-y-1 text-sm mb-8">
+			for _, g := range groups {
+				<a href={ templ.SafeURL("#b-" + g.Code) } class="hover:underline" style="color:var(--accent)">{ g.Name }<span class="num ml-1" style="color:var(--nickel)">{ Itoa(len(g.Books)) }</span></a>
 			}
-		</div>
+		</nav>
+		for _, g := range groups {
+			<section id={ "b-" + g.Code } class="mb-10">
+				<div class="flex items-center gap-3 mb-3">
+					if g.Logo != "" {
+						<img src={ g.Logo } alt="" class="h-7 object-contain" loading="lazy" onerror="this.remove()"/>
+					}
+					<h2 class="font-display text-xl" style="font-weight:500">{ g.Name }</h2>
+					if g.Slug != "" {
+						<a href={ templ.SafeURL("/brand/" + g.Slug) } class="text-xs hover:underline" style="color:var(--nickel)">shop ›</a>
+					}
+				</div>
+				<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+					for _, c := range g.Books {
+						<a href={ templ.SafeURL("/catalog/" + Itoa(c.ID)) } class="rounded-lg bg-white overflow-hidden hover:border-[color:var(--accent)]" style="border:1px solid var(--line)">
+							<img src={ "/catalog/" + Itoa(c.ID) + "/thumb" } class="w-full aspect-[3/4] object-cover" style="background:var(--stone)" loading="lazy" onerror="this.style.visibility='hidden'"/>
+							<div class="p-2 text-xs">
+								<div class="font-medium leading-snug line-clamp-2">
+									if c.Title != "" {
+										{ c.Title }
+									} else {
+										{ c.Name }
+									}
+								</div>
+								<div class="mt-1 flex items-center justify-between gap-2" style="color:var(--nickel)">
+									<span class="num">{ Itoa(c.Pages) } pp</span>
+									if c.Sections > 0 {
+										<span class="num">{ Itoa(c.Sections) } sections</span>
+									} else if c.OCRd > 0 && c.OCRd < c.Pages {
+										<span class="num">indexing { Itoa(c.OCRd) }/{ Itoa(c.Pages) }</span>
+									} else if c.OCRd == 0 {
+										<span>queued</span>
+									} else {
+										<span>indexed</span>
+									}
+								</div>
+							</div>
+						</a>
+					}
+				</div>
+			</section>
+		}
 		@logoCheck()
 	}
 }

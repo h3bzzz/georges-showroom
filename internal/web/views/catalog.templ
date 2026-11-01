@@ -4,7 +4,7 @@ import "georges_/internal/store"
 
 // Catalog is the continuous-scroll reader: every page stacked, lazy-loaded, with a table of
 // contents rail that jumps by anchor and tracks the visible page.
-templ Catalog(c store.CatalogRow, start int, tocs []store.TOCEntry, skus map[int][]string) {
+templ Catalog(c store.CatalogRow, start int, tocs []store.TOCEntry, skus map[int][]string, ocrd int) {
 	@Layout(c.Title) {
 		<div class="flex items-center gap-4 mb-4 flex-wrap">
 			<a href="/catalogs" class="text-sm" style="color:var(--accent)">‹ Catalogs</a>
@@ -26,7 +26,13 @@ templ Catalog(c store.CatalogRow, start int, tocs []store.TOCEntry, skus map[int
 			<aside class="reader-toc lg:sticky lg:top-20 max-h-[calc(100vh-6rem)] overflow-auto rounded-lg bg-white p-3 text-sm" style="border:1px solid var(--line)">
 				<div class="eyebrow mb-2">Contents</div>
 				if len(tocs) == 0 {
-					<p style="color:var(--nickel)">No contents yet. This book is being indexed.</p>
+					if ocrd == 0 {
+						<p style="color:var(--nickel)">Queued for indexing. Pages open from the publisher meanwhile.</p>
+					} else if ocrd < c.Pages {
+						<p style="color:var(--nickel)">Being indexed: <span class="num">{ Itoa(ocrd) }</span> of <span class="num">{ Itoa(c.Pages) }</span> pages read.</p>
+					} else {
+						<p style="color:var(--nickel)">No section headings found in this book.</p>
+					}
 				} else {
 					<ol class="space-y-0.5">
 						for _, t := range tocs {

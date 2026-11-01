@@ -17,6 +17,7 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -410,16 +411,47 @@ func (s *Server) search(w http.ResponseWriter, r *http.Request) {
 	}
 	fams, total, _ := s.st.ListFamilies(ctx, store.FamilyFilter{Query: q, PerPage: 8})
 	hits, _ := s.st.SearchCatalogText(ctx, q, 5)
-	views.SearchResults(q, fams, total, hits).Render(ctx, w)
+	// a model number no product carries yet (its book not read, or a printed cross-reference):
+	// the pages that print it, and the SKU page that gathers every crop and mention
+	skuURL := ""
+	var skuHits []store.CatalogHit
+	if k := ocr.Normalize(strings.Join(strings.Fields(q), "")); ocr.LooksLikeSKU(k) {
+		skuURL = "/sku/" + url.PathEscape(k)
+		if len(fams) == 0 {
+			skuHits, _ = s.st.SKUPages(ctx, k, 6)
+			// the same page found again by its text is noise next to the SKU hit
+			seen := map[[2]int]bool{}
+			for _, h := range skuHits {
+				seen[[2]int{h.CatalogID, h.Page}] = true
+			}
+			kept := hits[:0]
+			for _, h := range hits {
+				if !seen[[2]int{h.CatalogID, h.Page}] {
+					kept = append(kept, h)
+				}
+			}
+			hits = kept
+		}
+	}
+	views.SearchResults(q, fams, total, hits, skuHits, skuURL).Render(ctx, w)
 }
 
 func (s *Server) catalogs(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.st.ListCatalogs(r.Context(), r.URL.Query().Get("brand"))
+	groups, err := s.st.CatalogGroups(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
 	}
-	views.Catalogs(rows).Render(r.Context(), w)
+	if code := r.URL.Query().Get("brand"); code != "" {
+		kept := groups[:0]
+		for _, g := range groups {
+			if strings.EqualFold(g.Code, code) {
+				kept = append(kept, g)
+			}
+		}
+		groups = kept
+	}
+	views.Catalogs(groups).Render(r.Context(), w)
 }
 
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
@@ -439,7 +471,11 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 	}
 	tocs, _ := s.st.TOC(ctx, id)
 	skus, _ := s.st.PageSKUMap(ctx, id)
-	views.Catalog(*c, n, tocs, skus).Render(ctx, w)
+	ocrd := 0
+	if len(tocs) == 0 {
+		ocrd = s.st.CatalogProgress(ctx, id)
+	}
+	views.Catalog(*c, n, tocs, skus, ocrd).Render(ctx, w)
 }
 
 // adminCovers is the curation page: for a room, its banner and category tiles with candidates.

@@ -27,9 +27,46 @@ type Result struct {
 	Text  string
 }
 
+// sparsePage is the word count under which a page is retried enhanced: a price page
+// carries hundreds of words, a photo spread a caption or none.
+const sparsePage = 25
+
 // Run OCRs an image file. psm 3 = fully automatic page segmentation (good for catalogs).
+// A page that reads nearly empty is retried on an Enhanced copy (pale hairline type); the
+// better pass wins, its boxes mapped back to the page's own pixels.
 func Run(ctx context.Context, path string) (*Result, error) {
-	cmd := exec.CommandContext(ctx, "tesseract", path, "stdout", "--psm", "3", "-l", "eng", "tsv")
+	res, err := run(ctx, path, "3")
+	if err != nil || confident(res.Words) >= sparsePage {
+		return res, err
+	}
+	tmp, scale, err := enhanceToTemp(path)
+	if err != nil {
+		return res, nil
+	}
+	defer os.Remove(tmp)
+	// psm 6 (one uniform block) reads the enhanced grid where psm 3 still finds no layout
+	for _, psm := range []string{"3", "6"} {
+		r2, err := run(ctx, tmp, psm)
+		if err != nil {
+			continue
+		}
+		if confident(r2.Words) > confident(res.Words) {
+			for i := range r2.Words {
+				w := &r2.Words[i]
+				w.X, w.Y = int(float64(w.X)/scale), int(float64(w.Y)/scale)
+				w.W, w.H = int(float64(w.W)/scale), int(float64(w.H)/scale)
+			}
+			res = r2
+		}
+		if confident(res.Words) >= sparsePage*4 {
+			break
+		}
+	}
+	return res, nil
+}
+
+func run(ctx context.Context, path, psm string) (*Result, error) {
+	cmd := exec.CommandContext(ctx, "tesseract", path, "stdout", "--psm", psm, "-l", "eng", "tsv")
 	// tesseract spawns OpenMP threads per process; with several processes in parallel that
 	// thrashes the CPU (load 20+ on 4 cores). One thread per process is much faster overall.
 	cmd.Env = append(os.Environ(), "OMP_THREAD_LIMIT=1")

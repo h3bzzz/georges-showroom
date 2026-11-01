@@ -15,6 +15,26 @@ type PageRef struct {
 	Pages     int
 }
 
+// PagesWithSparseOCR lists pages that were OCR'd but came back nearly blank (at most 200
+// characters): pale hairline type the raw pass could not see, re-read with ocr.Enhance.
+func (s *Store) PagesWithSparseOCR(ctx context.Context, brand string, limit int) ([]PageRef, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT c.id, c.brand_code, c.name, p.page, c.pages
+		FROM catalog_pages p JOIN catalogs c ON c.id=p.catalog_id
+		WHERE ($1='' OR c.brand_code=$1) AND p.ocr_at IS NOT NULL AND length(COALESCE(p.ocr_text,'')) <= 200
+		ORDER BY c.brand_code, c.name, p.page LIMIT $2`, brand, limit)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[PageRef])
+}
+
+// ResetExtracted marks a page for re-extraction (its crops will be re-cut with the new SKU boxes).
+func (s *Store) ResetExtracted(ctx context.Context, catalogID, page int) error {
+	_, err := s.Pool.Exec(ctx, `UPDATE catalog_pages SET extracted_at=NULL WHERE catalog_id=$1 AND page=$2`, catalogID, page)
+	return err
+}
+
 // PagesNeedingOCR lists catalog pages (for a brand code or all) not yet OCR'd.
 func (s *Store) PagesNeedingOCR(ctx context.Context, brand string, limit int) ([]PageRef, error) {
 	rows, err := s.Pool.Query(ctx, `

@@ -35,7 +35,7 @@ func safeName(s string) string {
 func catalogsExtractCmds() []*cobra.Command {
 	var brand string
 	var limit, workers int
-	var force bool
+	var force, sparse bool
 
 	ocrCmd := &cobra.Command{
 		Use:   "ocr",
@@ -47,7 +47,11 @@ func catalogsExtractCmds() []*cobra.Command {
 				return err
 			}
 			defer st.Close()
-			pages, err := st.PagesNeedingOCR(cmd.Context(), brand, limit)
+			list := st.PagesNeedingOCR
+			if sparse {
+				list = st.PagesWithSparseOCR
+			}
+			pages, err := list(cmd.Context(), brand, limit)
 			if err != nil {
 				return err
 			}
@@ -86,6 +90,9 @@ func catalogsExtractCmds() []*cobra.Command {
 						if err := st.SaveOCR(cmd.Context(), p.CatalogID, p.Page, path, res.Text, boxes); err != nil {
 							fmt.Printf("FAIL save %s p%d: %v\n", p.Name, p.Page, err)
 							continue
+						}
+						if sparse && len(boxes) > 0 {
+							_ = st.ResetExtracted(cmd.Context(), p.CatalogID, p.Page) // crops get their SKUs on re-extract
 						}
 						mu.Lock()
 						done++
@@ -176,6 +183,7 @@ func catalogsExtractCmds() []*cobra.Command {
 		},
 	}
 	extractCmd.Flags().BoolVar(&force, "force", false, "re-extract pages already processed")
+	ocrCmd.Flags().BoolVar(&sparse, "sparse", false, "re-read pages whose OCR came back nearly blank (pale hairline type) with image enhancement")
 	for _, c := range []*cobra.Command{ocrCmd, extractCmd} {
 		c.Flags().StringVar(&brand, "brand", "", "only this brand code")
 		c.Flags().IntVar(&limit, "limit", 100000, "max pages this run")

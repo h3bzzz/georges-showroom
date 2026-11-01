@@ -196,7 +196,8 @@ func buildTOCAndItems(cmd *cobra.Command, st *store.Store, dataDir string, c sto
 		_ = st.SaveItems(cmd.Context(), p.CatalogID, p.Page, rows)
 	}
 	var entries []store.TOCEntry
-	for _, e := range toc.Fold(heads, c.Pages) {
+	bname, cols, _ := st.BrandCollections(cmd.Context(), c.BrandCode)
+	for _, e := range toc.Fold(heads, c.Pages, toc.Options{Brand: bname, Collections: cols, Dict: toc.LoadDict(dictPath(dataDir))}) {
 		entries = append(entries, store.TOCEntry{Page: e.Page, Title: e.Title, Level: e.Level})
 	}
 	_ = st.ReplaceTOC(cmd.Context(), c.ID, entries, "ocr")

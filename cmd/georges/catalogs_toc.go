@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -12,6 +13,17 @@ import (
 	"georges_/internal/store"
 	"georges_/internal/toc"
 )
+
+// dictPath is the word list toc.Fold uses to tell a lone English heading from an OCR misread:
+// dwyl/english-words (370k words) fetched to data/raw/tools/words, or the system list.
+func dictPath(dataDir string) string {
+	for _, p := range []string{filepath.Join(dataDir, "tools", "words", "words_alpha.txt"), "/usr/share/dict/words"} {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
+}
 
 func catalogsTocCmd() *cobra.Command {
 	var brand string
@@ -55,8 +67,14 @@ func catalogsTocCmd() *cobra.Command {
 				}
 			}
 			total, printed := 0, 0
+			dict := toc.LoadDict(dictPath(cfg.DataDir))
+			codeOf := map[int]string{}
+			for _, p := range refs {
+				codeOf[p.CatalogID] = p.BrandCode
+			}
 			for id, heads := range byCat {
-				entries := toc.Fold(heads, pagesOf[id])
+				bname, cols, _ := st.BrandCollections(cmd.Context(), codeOf[id])
+				entries := toc.Fold(heads, pagesOf[id], toc.Options{Brand: bname, Collections: cols, Dict: dict})
 				var rows []store.TOCEntry
 				for _, e := range entries {
 					rows = append(rows, store.TOCEntry{Page: e.Page, Title: e.Title, Level: e.Level})
@@ -120,6 +138,7 @@ func printedTOC(texts map[int]string, heads map[int]string, pages int) []store.T
 	// drop OCR junk: too few letters, or a lone short word
 	var kept []toc.Printed
 	for _, e := range all {
+		e.Title = toc.CleanTitle(e.Title)
 		letters := 0
 		for _, r := range e.Title {
 			if r >= 'A' && r <= 'Z' || r >= 'a' && r <= 'z' {
