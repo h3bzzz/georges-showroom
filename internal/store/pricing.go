@@ -191,7 +191,8 @@ func (s *Store) RefreshBrandMultipliers(ctx context.Context) ([]BrandMultiplier,
 
 // PurgeJunkSKUs removes price-book lines and the catalog products they created whose "SKU" is
 // a measurement, a standard or a label (ocr.JunkSKU), then drops the catalog families left
-// empty. Products that gathered images, documents or price history are kept. Returns lines
+// empty. Products that gathered images (a stored file, not a "miss:" placeholder), documents
+// or price history are kept. Returns lines
 // and products removed.
 func (s *Store) PurgeJunkSKUs(ctx context.Context, brandCode string, junk func(string) bool) (int64, int64, error) {
 	rows, err := s.Pool.Query(ctx, `
@@ -225,10 +226,18 @@ func (s *Store) PurgeJunkSKUs(ctx context.Context, brandCode string, junk func(s
 		return 0, 0, err
 	}
 	lines := tag.RowsAffected()
+	// a "miss:" placeholder (web image lookup found nothing) must go before its product
+	_, err = s.Pool.Exec(ctx, `
+		DELETE FROM product_images i USING products p, brands b
+		WHERE i.product_id = p.id AND i.path IS NULL AND b.id = p.brand_id AND p.source = 'catalog'
+		  AND ($1 = '' OR b.code = $1) AND p.sku = ANY($2)`, brandCode, bad)
+	if err != nil {
+		return lines, 0, err
+	}
 	tag, err = s.Pool.Exec(ctx, `
 		DELETE FROM products p USING brands b
 		WHERE b.id = p.brand_id AND p.source = 'catalog' AND ($1 = '' OR b.code = $1) AND p.sku = ANY($2)
-		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.product_id = p.id)
+		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.product_id = p.id AND i.path IS NOT NULL)
 		  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.product_id = p.id)
 		  AND NOT EXISTS (SELECT 1 FROM price_history h WHERE h.product_id = p.id)`, brandCode, bad)
 	if err != nil {
@@ -238,7 +247,7 @@ func (s *Store) PurgeJunkSKUs(ctx context.Context, brandCode string, junk func(s
 	_, err = s.Pool.Exec(ctx, `
 		DELETE FROM product_families f WHERE f.source = 'catalog'
 		  AND NOT EXISTS (SELECT 1 FROM products p WHERE p.family_id = f.id)
-		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.family_id = f.id)
+		  AND NOT EXISTS (SELECT 1 FROM product_images i WHERE i.family_id = f.id AND i.path IS NOT NULL)
 		  AND NOT EXISTS (SELECT 1 FROM documents d WHERE d.family_id = f.id)`)
 	return lines, products, err
 }

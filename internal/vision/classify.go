@@ -71,8 +71,19 @@ func buildMedium() []Class {
 			"a QR code", "a text label on a coloured background", "a single large letter", "a spreadsheet",
 			"a certification badge", "a column of numbers",
 		}},
+		// a person at the product: a hands-under-the-tap or model-in-the-shower opener shot is a
+		// real photograph of a real product, yet never the card photo (the card shows the
+		// product, not a cook); kept as a photo for galleries, refused by RefreshFamilyBest
+		{Name: "lifestyle", Prompts: []string{
+			"a photo of a person washing their hands under a faucet", "a photo of a person's hands rinsing vegetables under running water",
+			"a photo of a person cooking at a kitchen sink", "a photo of a woman standing in a bathroom",
+			"a photo of a man taking a shower", "a photo of a person's arm reaching for a tap",
+			"a photo of a child at a sink", "a lifestyle photo of people in a kitchen",
+			"a photo of a person holding a hand shower", "a photo of someone's hands holding a cabinet pull",
+			"a portrait photo of a person", "a photo of a person's torso and arms at a counter",
+		}},
 		{Name: "other", Prompts: []string{
-			"a portrait photo of a person", "a blurry unrecognisable image", "a blank white image",
+			"a blurry unrecognisable image", "a blank white image",
 			"a photo of a tile or stone sample", "a photo of a room with no products", "a black rectangle",
 		}},
 	}

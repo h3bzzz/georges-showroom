@@ -8,6 +8,7 @@ func TestJunkSKU(t *testing.T) {
 		"2012/CSA", "NSF/ANSI372", "0.3MG/L", "1.2L/MIN", "1X/10X", "10X/1X", "2700K/4000K", "KELVIN/4000",
 		"AMPS/0.75", "MODEL/COLOR1/COLOR2", "W/6701", "50/BOX", "2.5/T1", "120Z", "12OZ", "RENT/LENT", "LH/RH",
 		"6F/7F/8F", "(2700K)", "120V/60HZ", "800-877-2376", "1-800-877-2376",
+		"414KPA", "175.GPM", "12VDC", "230VAC", "38DBA", "1400RPM", "1.65KWH", "60HZ", "1500MM",
 	}
 	for _, s := range junk {
 		if !JunkSKU(s) {
@@ -20,7 +21,7 @@ func TestJunkSKU(t *testing.T) {
 	real := []string{
 		"B/3-461WH", "SO30CE/B/TH", "2-628/03N", "MCL3450WS/S", "A9320-8-CHP/MB", "99/00A.SD1", "HPA.5436",
 		"62858LF-PC", "A008WU", "85350.XXX.FD", "SH-162-12.25", "37231", "RP71650NK", "K30-123-XX", "451211",
-		"UC30276RP3E4N", "AU-24K", "US10B",
+		"UC30276RP3E4N", "AU-24K", "US10B", "18202.112.DB", "3229236K", "4034A", "0510004A",
 	}
 	for _, s := range real {
 		if JunkSKU(s) {

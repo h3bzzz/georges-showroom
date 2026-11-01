@@ -14,7 +14,7 @@ import (
 
 func catalogsItemsCmd() *cobra.Command {
 	var brand string
-	var noLink bool
+	var noLink, purgeOnly bool
 	items := &cobra.Command{
 		Use:   "items",
 		Short: "Turn OCR'd price-book lines into catalog_items (SKU, description, price) and create products for new SKUs",
@@ -25,6 +25,15 @@ func catalogsItemsCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			if purgeOnly {
+				// the junk filter learned a new shape: drop what it created without re-reading pages
+				jl, jp, err := st.PurgeJunkSKUs(cmd.Context(), brand, ocr.JunkSKU)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("purged %d junk-SKU lines and %d products\n", jl, jp)
+				return nil
+			}
 			refs, err := st.OCRPages(cmd.Context(), brand)
 			if err != nil {
 				return err
@@ -113,6 +122,7 @@ func catalogsItemsCmd() *cobra.Command {
 		},
 	}
 	items.Flags().StringVar(&brand, "brand", "", "only this brand code")
+	items.Flags().BoolVar(&purgeOnly, "purge-only", false, "only remove lines and products whose SKU is junk (ocr.JunkSKU), then stop")
 	items.Flags().BoolVar(&noLink, "no-link", false, "do not rebuild family↔crop links at the end (30+ min; run `ingest link` once instead)")
 	return items
 }

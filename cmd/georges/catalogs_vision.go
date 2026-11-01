@@ -25,8 +25,8 @@ import (
 // crop_kind() (what may be a card photo at all) and subject_fits() (which crop may stand for
 // a family of a given category), then family photos are re-picked.
 func catalogsVisionCmd() *cobra.Command {
-	var brand, model, labels string
-	var limit, threads int
+	var brand, model, labels, rank string
+	var limit, threads, top int
 	var all, dry, eval, reclassify, spec bool
 	var mix float32
 	var show []string
@@ -117,6 +117,11 @@ func catalogsVisionCmd() *cobra.Command {
 			}
 			start := time.Now()
 			counts := map[string]int{}
+			if reclassify && rank != "" {
+				// label mining for a new class: the stored embeddings scored by the medium head,
+				// the --top most probable members of --rank printed for a human to look at
+				return rankCrops(ctx, medium, rank, top, brand, enc.Model, streamEmb)
+			}
 			if reclassify {
 				// prompts or thresholds changed: re-score stored embeddings, no image work
 				var pending []store.CropVision
@@ -279,9 +284,52 @@ func catalogsVisionCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&dry, "dry", false, "print verdicts, write nothing")
 	cmd.Flags().BoolVar(&eval, "eval", false, "leave-one-out accuracy on --labels; write nothing")
 	cmd.Flags().BoolVar(&reclassify, "reclassify", false, "re-score stored embeddings with the current prompts; no image work")
+	cmd.Flags().StringVar(&rank, "rank", "", "with --reclassify: print the crops the medium head finds most likely to be this class (label mining)")
+	cmd.Flags().IntVar(&top, "top", 60, "how many crops --rank prints")
 	cmd.Flags().BoolVar(&spec, "spec", false, "classify spec-sheet images (product_images source='spec') instead of catalog crops")
 	cmd.Flags().StringSliceVar(&show, "show", nil, "classify these image files and print the top classes")
 	return cmd
+}
+
+// rankCrops streams stored embeddings and prints the top crops by one medium class's
+// probability: "prob<TAB>path", most likely first, for picking hand labels of a new class.
+func rankCrops(ctx context.Context, medium *vision.Head, class string, top int, brand, model string,
+	stream func(context.Context, string, string, func(store.CropEmbedding) error) error) error {
+	ci := -1
+	for i, n := range medium.Names {
+		if n == class {
+			ci = i
+		}
+	}
+	if ci < 0 {
+		return fmt.Errorf("--rank %q: not a medium class (%s)", class, strings.Join(medium.Names, ", "))
+	}
+	type hit struct {
+		p    float32
+		path string
+	}
+	var hits []hit
+	n := 0
+	err := stream(ctx, brand, model, func(e store.CropEmbedding) error {
+		n++
+		_, _, probs := medium.Classify(e.Emb)
+		if len(hits) < top || probs[ci] > hits[len(hits)-1].p {
+			hits = append(hits, hit{probs[ci], e.Path})
+			sort.Slice(hits, func(a, b int) bool { return hits[a].p > hits[b].p })
+			if len(hits) > top {
+				hits = hits[:top]
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%d embeddings scored\n", n)
+	for _, h := range hits {
+		fmt.Printf("%.2f\t%s\n", h.p, h.path)
+	}
+	return nil
 }
 
 func topK(names []string, probs []float32, k int) string {

@@ -179,6 +179,9 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    -- milder scores (text/other 0.4, subject other 0.5) a 40-card audit found it wrong
 		    -- half the time (Duravit vanities, Gessi spouts and flush plates read as "other")
 		    AND NOT (cc.vkind IN ('text','other') AND COALESCE(cc.vscore,0) >= 0.6)
+		    -- a person at the tap (hands rinsing peppers, a model in the shower) is a photograph
+		    -- of the product but never its card
+		    AND NOT (cc.vkind = 'lifestyle' AND COALESCE(cc.vscore,0) >= 0.5)
 		    -- a detail shot or icon is never the card photo: a product crop on a 1700×2200 page is at
 		    -- least ~150 px on its long side and ~80 px on its short side (a tidied tall faucet is 108×177)
 		    AND ((cc.kind <> 'photo' AND (cc.vkind IS DISTINCT FROM 'photo' OR COALESCE(cc.quality,0) < 0.2)) OR (GREATEST(cc.w,cc.h) >= 150 AND LEAST(cc.w,cc.h) >= 80 AND cc.w*cc.h >= 12000))
@@ -223,8 +226,9 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 	// tables (Robern: the M Series room shot, then pages of cabinet drawings and SKUs). A family
 	// with no picture of its own, whose SKU is printed on a page, takes the nearest such opener
 	// above it: a page in the same book, at most four pages back, with one or two photographs,
-	// that the vision model reads as a photograph (not a mood board, a swatch or a dimensioned
-	// drawing), whose subject (when the model is sure) suits the family's category. A part or a
+	// that the vision model reads as a photograph (not a mood board, a swatch, a dimensioned
+	// drawing or a person at the tap), whose subject (when the model is sure) suits the family's
+	// category, with no printed section heading between the two pages. A part or a
 	// rough-in (tier 2, or a parts category) never borrows the collection shot: a drain is not
 	// a sink and a cartridge is not a faucet.
 	_, err = s.Pool.Exec(ctx, `
@@ -254,6 +258,10 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		  JOIN product_families pf ON pf.id=pl.family_id
 		  JOIN openers o ON o.catalog_id=pl.catalog_id AND o.page BETWEEN pl.page-4 AND pl.page
 		  WHERE (o.vsubject IS NULL OR COALESCE(o.vsubscore,0) < 0.7 OR subject_fits(o.vsubject, pf.category_path))
+		    -- never across a printed section heading: the Charlotte opener on p.140 is not a
+		    -- picture of the kitchen faucet whose cross-reference prints on p.144 under the next
+		    -- heading (OCR'd headings are too noisy to serve as fences)
+		    AND NOT EXISTS (SELECT 1 FROM catalog_toc t WHERE t.catalog_id=o.catalog_id AND t.source='printed' AND t.page > o.page AND t.page <= pl.page)
 		  ORDER BY pl.family_id, (pl.page - o.page) ASC, o.area DESC
 		)
 		UPDATE family_best fb SET photo_path=pick.path, photo_w=pick.w, photo_how='series', updated_at=now()

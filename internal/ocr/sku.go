@@ -12,7 +12,9 @@ import (
 var junkSKU = []*regexp.Regexp{
 	// rates and quantities: 4.5L/MIN, 8.8L/MIH (OCR of MIN), 0.3MG/L, 1.2L/MIN, 50/BOX, 2.5/T1, 12OZ/120Z
 	regexp.MustCompile(`^[\d.]+L?/(MIN|MIH|SEC|HR?|L|BOX|PK|CS|T\d)$`),
-	regexp.MustCompile(`^[\d.]+(MG|ML|OZ|0Z|LB|LBS|KG|GAL|GPM|GPF|LPM|PSI|KPA|BAR|KW|AMPS?)(/[A-Z]+)?$`),
+	// 414KPA (Brizo's pressure footnote), 12VDC/230VAC (transformers), 38DBA (Bosch noise),
+	// 1400RPM, 1.65KWH; DB alone stays (18202.112.DB is a Baldwin kit in Dark Bronze)
+	regexp.MustCompile(`^[\d.]+(MG|ML|OZ|0Z|LB|LBS|KG|GAL|GPM|GPF|LPM|PSI|KPA|BAR|KW|KWH|AMPS?|VAC|VDC|DBA|RPM|HZ|BTU|MM|CM)(/[A-Z]+)?$`),
 	// plumbing and electrical standards: A112.18.1, A112.1016/ASSE, 1016/CSA, 2012/CSA, NSF/ANSI372, B125.1
 	regexp.MustCompile(`^(A|AL)112\.`),
 	regexp.MustCompile(`(^|[/.-])(ASSE|CSA|ANSI|NSF|ASME|IAPMO|UPC|CUPC|ADA|UL|CSAUS)(\d|/|$)`),
