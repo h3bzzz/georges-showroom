@@ -25,8 +25,12 @@ Every push to `main` runs `.github/workflows/deploy.yml`: it builds the image, p
 5. Copy the data the storefront serves (everything but the embedded Postgres and the raw
    catalogs/webimg masters is optional, but simplest is the whole folder):
 
-       rsync -a --info=progress2 --exclude pg --exclude tools --exclude cache \
-         data/raw/ root@VPS_IP:/srv/georges/data/
+       rsync -a --info=progress2 data/raw/{crops,crops_hd,logos,webimg,catalogs,specimg} \
+         root@VPS_IP:/srv/georges/data/
+       ssh root@VPS_IP 'install -d -o 10001 -g 10001 /srv/georges/data/cache /srv/georges/data/covers'
+
+   The container runs as uid 10001 and only needs to write renditions (`cache/`) and admin
+   cover uploads (`covers/`); the masters stay root-owned and read-only to the app.
 
 6. Load the database. The embedded Postgres ships no `pg_dump`, so install the client once on
    the workstation (`sudo pacman -S postgresql-libs` on Arch), dump while `georges serve` or
