@@ -1,0 +1,55 @@
+# Production stack for a Hostinger VPS (Docker template). Deployed by .github/workflows/deploy.yml
+# through hostinger/deploy-action, which writes the KEY=value pairs it is given as this file's .env.
+#
+#   DOMAIN             public hostname; Caddy fetches a Let's Encrypt cert for it (unset = plain :80)
+#   POSTGRES_PASSWORD  database password (default only for a first boot)
+#   IMAGE_TAG          image tag to run (the workflow passes the commit SHA)
+#   DATA_PATH          host folder holding the rsync'd DATA_DIR (crops, webimg, covers, logos, …)
+services:
+  db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: georges
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-georges}
+      POSTGRES_DB: georges
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U georges -d georges"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  app:
+    image: ghcr.io/h3bzzz/georges-showroom:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://georges:${POSTGRES_PASSWORD:-georges}@db:5432/georges?sslmode=disable
+      DATA_DIR: /data
+    volumes:
+      - ${DATA_PATH:-/srv/georges/data}:/data
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    command: caddy reverse-proxy --from ${DOMAIN:-:80} --to app:8080
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

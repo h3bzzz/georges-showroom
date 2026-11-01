@@ -1,6 +1,0 @@
-{
-  "dependencies": {
-    "@caveman-ai/middleware": "^0.1.0-alpha.2",
-    "@caveman-ai/sdk": "^1.1.0"
-  }
-}

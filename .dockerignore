@@ -1,0 +1,14 @@
+.git
+.env
+.env.*
+!.env.example
+.air
+.chrome-profile
+bin
+data/raw
+docs
+testdata
+node_modules
+*.pdf
+*.jpg
+*.jpeg
