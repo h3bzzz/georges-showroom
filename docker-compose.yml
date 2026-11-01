@@ -1,5 +1,5 @@
 # Production stack for a Hostinger VPS (Docker template). Deployed by .github/workflows/deploy.yml
-# through hostinger/deploy-action, which writes the KEY=value pairs it is given as this file's .env.
+# through hostinger/deploy-on-vps, which writes the KEY=value pairs it is given as this file's .env.
 #
 #   DOMAIN             public hostname; Caddy fetches a Let's Encrypt cert for it (unset = plain :80)
 #   POSTGRES_PASSWORD  database password (default only for a first boot)

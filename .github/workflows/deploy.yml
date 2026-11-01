@@ -31,11 +31,12 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
+    if: vars.HOSTINGER_VM_ID != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: hostinger/deploy-action@v1
+      - uses: hostinger/deploy-on-vps@v2
         with:
           api-key: ${{ secrets.HOSTINGER_API_KEY }}
           virtual-machine: ${{ vars.HOSTINGER_VM_ID }}
