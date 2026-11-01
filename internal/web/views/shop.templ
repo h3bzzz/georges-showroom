@@ -1,4 +1,4 @@
-	if f.Category != "" || len(f.Brands) > 0 || len(f.Finishes) > 0 || len(f.Specs) > 0 || f.MinCents > 0 || f.MaxCents > 0 || f.Query != "" {package views
+package views
 
 import "georges_/internal/store"
 
@@ -155,7 +155,7 @@ templ Sidebar(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
 }
 
 templ ActiveChips(f store.BrowseFilter, u ShopURL) {
-	if f.Category != "" || len(f.Brands) > 0 || len(f.Finishes) > 0 || f.MinCents > 0 || f.MaxCents > 0 || f.Query != "" {
+	if f.Category != "" || len(f.Brands) > 0 || len(f.Finishes) > 0 || len(f.Specs) > 0 || f.MinCents > 0 || f.MaxCents > 0 || f.Query != "" {
 		<div class="flex flex-wrap gap-1.5">
 			if f.Query != "" {
 				<a href={ templ.SafeURL(u.ClearQuery()) } class="chip">“{ f.Query }” ×</a>
