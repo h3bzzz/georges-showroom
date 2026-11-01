@@ -538,7 +538,7 @@ templ BookWheel(books []store.BrandBook) {
 		<button type="button" class="wheel-btn next" aria-label="Next brand">›</button>
 		<div class="wheel-caption" aria-live="polite">
 			<a class="wheel-brand font-display" href="#">&nbsp;</a>
-			<div class="wheel-meta"><span class="wheel-title"></span> <span class="wheel-count num"></span></div>
+			<div class="wheel-meta"><span class="wheel-title"></span> <span class="wheel-count num"></span> · <a class="wheel-open" href="#" style="color:var(--accent)">Open the book →</a></div>
 		</div>
 	</div>
 	@bookWheelScript()
@@ -565,11 +565,15 @@ script bookWheelScript() {
 		var c=items[cur];
 		brand.textContent=c.dataset.brand; brand.href='/brand/'+c.dataset.slug;
 		title.textContent=c.dataset.title+' · '+c.dataset.pages+' pp'; count.textContent=(cur+1)+' / '+n;
+		var open=w.querySelector('.wheel-open'); if(open){ open.href=c.getAttribute('href'); }
 	}
 	function go(i){ cur=((i%n)+n)%n; layout(); }
 	w.querySelector('.prev').addEventListener('click',function(){ go(cur-1); restart(); });
 	w.querySelector('.next').addEventListener('click',function(){ go(cur+1); restart(); });
-	items.forEach(function(el,i){ el.addEventListener('click',function(e){ if(i!==cur){ e.preventDefault(); go(i); restart(); } }); });
+	// a click on any book opens its catalog reader (the href); the arrows, keys and the mouse
+	// wheel turn the wheel. A swipe is not a click: pointerup with movement cancels it.
+	var swiped=false;
+	items.forEach(function(el){ el.addEventListener('click',function(e){ if(swiped){ e.preventDefault(); swiped=false; } }); });
 	w.addEventListener('keydown',function(e){
 		if(e.key==='ArrowRight'){ go(cur+1); e.preventDefault(); } else if(e.key==='ArrowLeft'){ go(cur-1); e.preventDefault(); }
 		else if(e.key==='Home'){ go(0); e.preventDefault(); } else if(e.key==='End'){ go(n-1); e.preventDefault(); }
@@ -579,6 +583,10 @@ script bookWheelScript() {
 	// mouse wheel / trackpad over the stage turns the wheel (throttled so one notch = one book)
 	var stage=w.querySelector('.wheel-stage'), lastWheel=0;
 	stage.addEventListener('wheel',function(e){
+		// only a sideways gesture (trackpad swipe, shift+wheel) turns the wheel: a vertical
+		// scroll must keep moving the page, or the home page traps the reader at the books
+		var horizontal=Math.abs(e.deltaX)>Math.abs(e.deltaY) || e.shiftKey;
+		if(!horizontal) return;
 		e.preventDefault();
 		var now=Date.now(); if(now-lastWheel<320) return; lastWheel=now;
 		var d=Math.abs(e.deltaX)>Math.abs(e.deltaY)?e.deltaX:e.deltaY;
@@ -587,7 +595,7 @@ script bookWheelScript() {
 	},{passive:false});
 	var startX=null;
 	w.addEventListener('pointerdown',function(e){ startX=e.clientX; });
-	w.addEventListener('pointerup',function(e){ if(startX===null) return; var dx=e.clientX-startX; startX=null; if(Math.abs(dx)>40){ go(dx<0?cur+1:cur-1); restart(); } });
+	w.addEventListener('pointerup',function(e){ if(startX===null) return; var dx=e.clientX-startX; startX=null; if(Math.abs(dx)>40){ swiped=true; go(dx<0?cur+1:cur-1); restart(); } });
 	function tick(){ if(!paused && !document.hidden) go(cur+1); }
 	function restart(){ if(timer) clearInterval(timer); if(!reduce) timer=setInterval(tick,4500); }
 	['mouseenter','focusin'].forEach(function(ev){ w.addEventListener(ev,function(){ paused=true; }); });

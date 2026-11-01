@@ -57,3 +57,49 @@ cartridge, aerator, escutcheon, flange, valve body, rough-in kit, extension kit,
 hose, mounting kit, gasket, o-ring, supply line, stop, p-trap, tailpiece, stopper, faucet deck,
 deck plate, spec sheet, cut sheet, installation, parts diagram, replacement, repair kit,
 "for use with", "fits", "compatible with".
+
+
+## Finish resolution (2026-11-01)
+
+"antique rubbed bronze" is not a finish anyone stocks; Oil Rubbed Bronze, Antique Bronze and
+Venetian Bronze are. The query therefore resolves to real finish names before it touches the
+database — the canonical-value-plus-synonyms pattern (Bloomreach `color_group`, Google
+Retail `ColorInfo.color_families`, Algolia/Constructor attribute enrichment) applied to
+finishes, plus Bloomreach's "colour-based image SKU selection" for the picture.
+
+- `internal/store/finishdict.go`: every distinct `products.finish` is classified once into
+  tones (bronze, nickel, brass…), a head tone (Black Nickel reads black, Nickel Silver reads
+  silver, slash two-tones match either), a treatment (polished | satin | matte | antique |
+  unlacquered | unspecified) and canonical tokens; brand modifiers (PVD, Lifetime, Vibrant,
+  Luxe) are dropped. Cached five minutes from the products table, no extra table to maintain.
+- `intent.go` `finishRun`: a run of finish words anchored by a tone or treatment word is one
+  concept; group words expand (silver → chrome, nickel, stainless, pewter; gold → gold, brass).
+  `FinishDict.Resolve` returns every name that shares the tone and does not contradict the
+  treatment (Dark Bronze is in, Satin Bronze is out), with Exact = names whose canonical tokens
+  equal the query's (Jaccard 1.0): "antique rubbed bronze" → Oil Rubbed Bronze, Venetian
+  Bronze, Antique Bronze, Distressed ORB… + the unspecified bronzes.
+- Retrieval is exact: `f.id IN (SELECT family_id FROM products WHERE finish = ANY(names))`,
+  answered by `products(finish, family_id)` in 20 ms. Matching the names in the family blob
+  as well cost 900 ms (a 24-way regex defeats the trigram index) and only added families whose
+  finish is unknown — those are the `finish:any` widening tier, used when a page is not full.
+- Ranking (`browse.go` `rankFamilies`, a CTE over a slim projection, then hydration of 24
+  rows): stocked in the finish (3) and type/category hits; parts (tier 2) last; families with
+  a photo; then **off-tone pictures behind every round** (fit −1: the card's picture shows
+  another metal, read from `family_best.photo_tone` — CLIP verdict, else the SKU finish of
+  the crop); then a brand round-robin with one slot per brand per round for finish queries
+  and a repeated title waiting three rounds; inside a brand's slot the picture decides (vendor
+  master in the finish 2 > crop in the tone 1 > unknown 0), then the exact name, then tier.
+  On a finish page the picture outranks the tier: a bronze-pictured towel ring beats a
+  chrome-pictured faucet. 5.3 s → 0.25 s for the whole page; `RANK_DEBUG=1` prints the keys.
+- Picture: `preferFinishImages` swaps the card to a vendor master in the finish, a crop linked
+  to a SKU in it, or a crop in the right tone; cards that still show another metal say
+  "pictured in chrome / nickel". Tones come from `catalogs vision --tone`: zero-shot CLIP
+  prompts mixed with prototypes from 1,740 crops linked to SKUs of a known finish, scored from
+  the stored embeddings (no image work), written to `catalog_crops.vtone`; vendor images take
+  the tone of their SKU's finish.
+- Chips under the count ("Just one finish: Oil Rubbed Bronze · Venetian Bronze …") narrow to
+  one exact finish via the existing facet.
+
+Next: a `finish_aliases` table for brand-specific words the classifier cannot guess (Brizo
+"Luxe Steel" is stainless, Newport "Forever Brass"), the same resolution for the header
+search's suggestions, and a golden query set asserting precision@24 per finish family.

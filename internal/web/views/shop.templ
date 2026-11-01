@@ -186,6 +186,16 @@ templ ShopResults(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
 				}
 			</div>
 		</div>
+		if len(r.FinishNames) > 1 && len(f.Finishes) == 0 {
+			<div class="flex flex-wrap items-center gap-1.5 mb-4 text-xs" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML show:#shop:top" hx-push-url="true">
+				<span style="color:var(--nickel)">Just one finish:</span>
+				for i, n := range r.FinishNames {
+					if i < 8 {
+						<a href={ templ.SafeURL(u.ToggleFinish(n)) } class="chip">{ n }</a>
+					}
+				}
+			</div>
+		}
 		if r.Total == 0 {
 			<div class="rounded-xl bg-white p-10 text-center" style="border:1px solid var(--line)">
 				<div class="font-display text-2xl mb-2">Nothing here yet</div>
@@ -222,8 +232,17 @@ templ FamilyCard(f store.FamilyRow) {
 					· { Itoa(f.Finishes) } finishes
 				}
 			</div>
-			if f.ImageFinish != "" {
-				<div class="text-[0.7rem] mt-0.5" style="color:var(--nickel)">shown in { f.ImageFinish }</div>
+			switch {
+				case f.ImageMatch == "exact" && f.ImageFinish != "":
+					<div class="text-[0.7rem] mt-0.5" style="color:var(--nickel)">shown in { f.ImageFinish }</div>
+				case f.ImageMatch == "other":
+					<div class="text-[0.7rem] mt-0.5" style="color:var(--accent)">pictured in { store.ToneLabel(f.ImageTone) }
+						if f.ImageFinish != "" {
+							({ f.ImageFinish })
+						}
+					</div>
+				case f.ImageMatch == "" && f.ImageFinish != "":
+					<div class="text-[0.7rem] mt-0.5" style="color:var(--nickel)">shown in { f.ImageFinish }</div>
 			}
 			<div class="mt-auto pt-2">
 				<div class="font-semibold num">{ PriceRange(f.MinCents, f.MaxCents) }</div>

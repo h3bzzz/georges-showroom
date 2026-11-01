@@ -25,7 +25,8 @@ import (
 func upscaleCmd() *cobra.Command {
 	var brand, model string
 	var limit, maxW, batch, gpu, quality int
-	var all bool
+	var all, audit, redo, fix bool
+	var maxDiv float64
 	cmd := &cobra.Command{
 		Use:   "upscale",
 		Short: "Real-ESRGAN 4x for small catalog crops (best photo per family first); writes crops_hd/ and promotes them",
@@ -37,6 +38,9 @@ func upscaleCmd() *cobra.Command {
 				return err
 			}
 			defer st.Close()
+			if audit {
+				return auditHD(ctx, st, cfg.DataDir, brand, maxDiv, fix)
+			}
 			bin, err := upscale.Ensure(ctx, cfg.DataDir)
 			if err != nil {
 				return err
@@ -46,6 +50,28 @@ func upscaleCmd() *cobra.Command {
 			}
 			work := filepath.Join(cfg.DataDir, "tools", "upscale-work")
 			_ = os.RemoveAll(work)
+			if redo {
+				// exactly the crops whose copy failed or was revoked by --audit --fix, whatever
+				// their width; the copies are checked against the native crop before they are kept
+				cands, err := st.ResetFailedHD(ctx, brand)
+				if err != nil {
+					return err
+				}
+				fmt.Printf("%d failed/revoked crops to upscale again\n", len(cands))
+				for i := 0; i < len(cands); i += batch {
+					part := cands[i:min(i+batch, len(cands))]
+					res, err := upscaleBatch(ctx, bin, cfg.DataDir, work, part, upscale.Options{Model: model, GPU: gpu}, quality)
+					if err != nil {
+						return err
+					}
+					res = dropGarbled(cfg.DataDir, part, res, maxDiv)
+					if _, err := st.SetCropHD(ctx, res); err != nil {
+						return err
+					}
+				}
+				_ = os.RemoveAll(work)
+				return nil
+			}
 			done, failed, small, _ := st.HDStats(ctx)
 			fmt.Printf("hd so far: %d done, %d failed, %d family photos still small · model=%s gpu=%d\n", done, failed, small, model, gpu)
 			start, total := time.Now(), 0
@@ -65,6 +91,7 @@ func upscaleCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
+				res = dropGarbled(cfg.DataDir, cands, res, maxDiv)
 				promoted, err := st.SetCropHD(ctx, res)
 				if err != nil {
 					return err
@@ -95,7 +122,77 @@ func upscaleCmd() *cobra.Command {
 	cmd.Flags().IntVar(&gpu, "gpu", 0, "vulkan device index (-1 = CPU)")
 	cmd.Flags().IntVar(&quality, "quality", 88, "JPEG quality for the HD copy")
 	cmd.Flags().BoolVar(&all, "all", false, "every linked crop, not just the ones shown as a family's photo/drawing")
+	cmd.Flags().BoolVar(&audit, "audit", false, "compare every HD copy with its native crop and list the garbled ones (see --fix)")
+	cmd.Flags().Float64Var(&maxDiv, "max-div", 30, "mean RGB difference from the native crop above which an HD copy counts as garbled (checked on every fresh copy and by --audit)")
+	cmd.Flags().BoolVar(&fix, "fix", false, "with --audit: revoke garbled copies (families and covers fall back to the native crop; rerun with --redo to upscale them again)")
+	cmd.Flags().BoolVar(&redo, "redo", false, "retry crops whose upscale failed or was revoked")
 	return cmd
+}
+
+// dropGarbled checks fresh HD copies against their native crops and marks the ones the GPU
+// garbled as failed (hd_w=-1, file removed) instead of letting a page show them.
+func dropGarbled(dataDir string, cands []store.HDCandidate, res []store.HDResult, maxDiv float64) []store.HDResult {
+	native := map[int64]string{}
+	for _, c := range cands {
+		native[c.ID] = c.Path
+	}
+	for i, r := range res {
+		if r.W <= 0 {
+			continue
+		}
+		hd := filepath.Join(dataDir, filepath.FromSlash(r.Path))
+		if d := upscale.Divergence(filepath.Join(dataDir, filepath.FromSlash(native[r.ID])), hd); d > maxDiv {
+			fmt.Printf("  garbled upscale (divergence %.0f): %s\n", d, r.Path)
+			_ = os.Remove(hd)
+			res[i] = store.HDResult{ID: r.ID, W: -1}
+		}
+	}
+	return res
+}
+
+// auditHD finds HD copies the GPU garbled: the HD file no longer resembles the crop it was
+// made from. With fix, the copies are revoked so pages show the native crop again.
+func auditHD(ctx context.Context, st *store.Store, dataDir, brand string, maxDiv float64, fix bool) error {
+	pairs, err := st.HDPairs(ctx, brand)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("%d HD copies to compare\n", len(pairs))
+	bad, unreadable, shown := 0, 0, 0
+	var hist [8]int
+	for i, p := range pairs {
+		d := upscale.Divergence(filepath.Join(dataDir, filepath.FromSlash(p.Path)), filepath.Join(dataDir, filepath.FromSlash(p.HDPath)))
+		if d < 0 {
+			unreadable++
+			continue
+		}
+		hist[min(int(d/10), 7)]++
+		if d > maxDiv {
+			bad++
+			flag := ""
+			if p.Shown {
+				shown++
+				flag = "  (shown)"
+			}
+			fmt.Printf("  %6.1f  crop %d  %s%s\n", d, p.ID, p.HDPath, flag)
+			if fix {
+				if _, err := st.RevokeHD(ctx, p.ID); err != nil {
+					return err
+				}
+				_ = os.Remove(filepath.Join(dataDir, filepath.FromSlash(p.HDPath)))
+			}
+		}
+		if (i+1)%1000 == 0 {
+			fmt.Printf("  … %d/%d compared, %d garbled so far\n", i+1, len(pairs), bad)
+		}
+	}
+	fmt.Printf("divergence histogram (per 10): %v\n", hist)
+	fmt.Printf("%d garbled (%d of them shown on a page), %d unreadable", bad, shown, unreadable)
+	if fix {
+		fmt.Printf(" — revoked; run `georges upscale --redo` to upscale them again")
+	}
+	fmt.Println()
+	return nil
 }
 
 // upscaleBatch runs one ncnn process over cands and writes crops_hd/<same relative path>.

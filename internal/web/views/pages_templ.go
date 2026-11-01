@@ -3478,7 +3478,7 @@ func BookWheel(books []store.BrandBook) templ.Component {
 				return templ_7745c5c3_Err
 			}
 		}
-		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 315, "</div><button type=\"button\" class=\"wheel-btn next\" aria-label=\"Next brand\">›</button><div class=\"wheel-caption\" aria-live=\"polite\"><a class=\"wheel-brand font-display\" href=\"#\">&nbsp;</a><div class=\"wheel-meta\"><span class=\"wheel-title\"></span> <span class=\"wheel-count num\"></span></div></div></div>")
+		templ_7745c5c3_Err = templruntime.WriteString(templ_7745c5c3_Buffer, 315, "</div><button type=\"button\" class=\"wheel-btn next\" aria-label=\"Next brand\">›</button><div class=\"wheel-caption\" aria-live=\"polite\"><a class=\"wheel-brand font-display\" href=\"#\">&nbsp;</a><div class=\"wheel-meta\"><span class=\"wheel-title\"></span> <span class=\"wheel-count num\"></span> · <a class=\"wheel-open\" href=\"#\" style=\"color:var(--accent)\">Open the book →</a></div></div></div>")
 		if templ_7745c5c3_Err != nil {
 			return templ_7745c5c3_Err
 		}
@@ -3492,8 +3492,8 @@ func BookWheel(books []store.BrandBook) templ.Component {
 
 func bookWheelScript() templ.ComponentScript {
 	return templ.ComponentScript{
-		Name: `__templ_bookWheelScript_8d9f`,
-		Function: `function __templ_bookWheelScript_8d9f(){var w=document.getElementById('book-wheel'); if(!w) return;
+		Name: `__templ_bookWheelScript_9ad1`,
+		Function: `function __templ_bookWheelScript_9ad1(){var w=document.getElementById('book-wheel'); if(!w) return;
 	var items=[].slice.call(w.querySelectorAll('.wheel-item')), n=items.length, cur=0, timer=null, paused=false;
 	var brand=w.querySelector('.wheel-brand'), title=w.querySelector('.wheel-title'), count=w.querySelector('.wheel-count');
 	var reduce=window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -3513,11 +3513,15 @@ func bookWheelScript() templ.ComponentScript {
 		var c=items[cur];
 		brand.textContent=c.dataset.brand; brand.href='/brand/'+c.dataset.slug;
 		title.textContent=c.dataset.title+' · '+c.dataset.pages+' pp'; count.textContent=(cur+1)+' / '+n;
+		var open=w.querySelector('.wheel-open'); if(open){ open.href=c.getAttribute('href'); }
 	}
 	function go(i){ cur=((i%n)+n)%n; layout(); }
 	w.querySelector('.prev').addEventListener('click',function(){ go(cur-1); restart(); });
 	w.querySelector('.next').addEventListener('click',function(){ go(cur+1); restart(); });
-	items.forEach(function(el,i){ el.addEventListener('click',function(e){ if(i!==cur){ e.preventDefault(); go(i); restart(); } }); });
+	// a click on any book opens its catalog reader (the href); the arrows, keys and the mouse
+	// wheel turn the wheel. A swipe is not a click: pointerup with movement cancels it.
+	var swiped=false;
+	items.forEach(function(el){ el.addEventListener('click',function(e){ if(swiped){ e.preventDefault(); swiped=false; } }); });
 	w.addEventListener('keydown',function(e){
 		if(e.key==='ArrowRight'){ go(cur+1); e.preventDefault(); } else if(e.key==='ArrowLeft'){ go(cur-1); e.preventDefault(); }
 		else if(e.key==='Home'){ go(0); e.preventDefault(); } else if(e.key==='End'){ go(n-1); e.preventDefault(); }
@@ -3527,6 +3531,10 @@ func bookWheelScript() templ.ComponentScript {
 	// mouse wheel / trackpad over the stage turns the wheel (throttled so one notch = one book)
 	var stage=w.querySelector('.wheel-stage'), lastWheel=0;
 	stage.addEventListener('wheel',function(e){
+		// only a sideways gesture (trackpad swipe, shift+wheel) turns the wheel: a vertical
+		// scroll must keep moving the page, or the home page traps the reader at the books
+		var horizontal=Math.abs(e.deltaX)>Math.abs(e.deltaY) || e.shiftKey;
+		if(!horizontal) return;
 		e.preventDefault();
 		var now=Date.now(); if(now-lastWheel<320) return; lastWheel=now;
 		var d=Math.abs(e.deltaX)>Math.abs(e.deltaY)?e.deltaX:e.deltaY;
@@ -3535,7 +3543,7 @@ func bookWheelScript() templ.ComponentScript {
 	},{passive:false});
 	var startX=null;
 	w.addEventListener('pointerdown',function(e){ startX=e.clientX; });
-	w.addEventListener('pointerup',function(e){ if(startX===null) return; var dx=e.clientX-startX; startX=null; if(Math.abs(dx)>40){ go(dx<0?cur+1:cur-1); restart(); } });
+	w.addEventListener('pointerup',function(e){ if(startX===null) return; var dx=e.clientX-startX; startX=null; if(Math.abs(dx)>40){ swiped=true; go(dx<0?cur+1:cur-1); restart(); } });
 	function tick(){ if(!paused && !document.hidden) go(cur+1); }
 	function restart(){ if(timer) clearInterval(timer); if(!reduce) timer=setInterval(tick,4500); }
 	['mouseenter','focusin'].forEach(function(ev){ w.addEventListener(ev,function(){ paused=true; }); });
@@ -3543,8 +3551,8 @@ func bookWheelScript() templ.ComponentScript {
 	window.addEventListener('resize',layout);
 	layout(); restart();
 }`,
-		Call:       templ.SafeScript(`__templ_bookWheelScript_8d9f`),
-		CallInline: templ.SafeScriptInline(`__templ_bookWheelScript_8d9f`),
+		Call:       templ.SafeScript(`__templ_bookWheelScript_9ad1`),
+		CallInline: templ.SafeScriptInline(`__templ_bookWheelScript_9ad1`),
 	}
 }
 
@@ -3588,7 +3596,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 			var templ_7745c5c3_Var194 templ.SafeURL
 			templ_7745c5c3_Var194, templ_7745c5c3_Err = templ.JoinURLErrs(templ.SafeURL(t.Href))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 604, Col: 34}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 612, Col: 34}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var194))
 			if templ_7745c5c3_Err != nil {
@@ -3614,7 +3622,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 			var templ_7745c5c3_Var196 string
 			templ_7745c5c3_Var196, templ_7745c5c3_Err = templ.ResolveAttributeValue(tileTitle(t))
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 604, Col: 109}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 612, Col: 109}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var196)
 			if templ_7745c5c3_Err != nil {
@@ -3633,7 +3641,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 					var templ_7745c5c3_Var197 string
 					templ_7745c5c3_Var197, templ_7745c5c3_Err = templ.ResolveAttributeValue(Img("/files/"+t.Cover.Path, 960))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 608, Col: 52}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 616, Col: 52}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var197)
 					if templ_7745c5c3_Err != nil {
@@ -3646,7 +3654,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 					var templ_7745c5c3_Var198 string
 					templ_7745c5c3_Var198, templ_7745c5c3_Err = templ.ResolveAttributeValue(HeroSrcset("/files/" + t.Cover.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 608, Col: 100}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 616, Col: 100}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var198)
 					if templ_7745c5c3_Err != nil {
@@ -3664,7 +3672,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 					var templ_7745c5c3_Var199 string
 					templ_7745c5c3_Var199, templ_7745c5c3_Err = templ.ResolveAttributeValue(Img("/files/"+t.Cover.Path, 640))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 610, Col: 52}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 618, Col: 52}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var199)
 					if templ_7745c5c3_Err != nil {
@@ -3677,7 +3685,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 					var templ_7745c5c3_Var200 string
 					templ_7745c5c3_Var200, templ_7745c5c3_Err = templ.ResolveAttributeValue(CardSrcset("/files/" + t.Cover.Path))
 					if templ_7745c5c3_Err != nil {
-						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 610, Col: 100}
+						return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 618, Col: 100}
 					}
 					_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ_7745c5c3_Var200)
 					if templ_7745c5c3_Err != nil {
@@ -3696,7 +3704,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 			var templ_7745c5c3_Var201 string
 			templ_7745c5c3_Var201, templ_7745c5c3_Err = templ.JoinStringErrs(t.Name)
 			if templ_7745c5c3_Err != nil {
-				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 615, Col: 37}
+				return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 623, Col: 37}
 			}
 			_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var201))
 			if templ_7745c5c3_Err != nil {
@@ -3714,7 +3722,7 @@ func TileSet(tiles []store.HomeTileView) templ.Component {
 				var templ_7745c5c3_Var202 string
 				templ_7745c5c3_Var202, templ_7745c5c3_Err = templ.JoinStringErrs(Thousands(t.Count))
 				if templ_7745c5c3_Err != nil {
-					return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 617, Col: 55}
+					return templ.Error{Err: templ_7745c5c3_Err, FileName: `pages.templ`, Line: 625, Col: 55}
 				}
 				_, templ_7745c5c3_Err = templ_7745c5c3_Buffer.WriteString(templ.EscapeString(templ_7745c5c3_Var202))
 				if templ_7745c5c3_Err != nil {

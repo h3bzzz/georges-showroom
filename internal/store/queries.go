@@ -246,6 +246,8 @@ type FamilyRow struct {
 	ListMax     int64             `json:"list_max_cents"`
 	ImageW      int               `json:"image_w"`      // source width of Image (0 = unknown); small crops are not blown up
 	ImageFinish string            `json:"image_finish"` // finish of the SKU the shown crop belongs to ("" = unknown)
+	ImageTone   string            `json:"image_tone"`   // what metal the shown picture reads as (silver | gold | bronze | black | white | copper | gray | other | "")
+	ImageMatch  string            `json:"-" db:"-"`     // for a finish query: exact | tone | other | "" (see preferFinishImages)
 }
 
 const familySelect = `
@@ -259,7 +261,8 @@ const familySelect = `
 	  COALESCE((SELECT max(list_cents(p.source, p.price_cents, p.msrp_cents)) FROM products p WHERE p.family_id=f.id),0),
 	  CASE WHEN fb.web_path IS NOT NULL THEN 0 ELSE COALESCE(fb.photo_w, 0) END,
 	  COALESCE((SELECT p.finish FROM catalog_crops cc JOIN products p ON p.family_id=f.id AND (p.sku=cc.sku OR (cc.base_n IS NOT NULL AND p.sku_n=cc.base_n))
-	            WHERE fb.photo_path IS NOT NULL AND (cc.path=fb.photo_path OR cc.hd_path=fb.photo_path) AND COALESCE(p.finish,'')<>'' LIMIT 1),'')
+	            WHERE fb.photo_path IS NOT NULL AND (cc.path=fb.photo_path OR cc.hd_path=fb.photo_path) AND COALESCE(p.finish,'')<>'' LIMIT 1),''),
+	  COALESCE(fb.photo_tone, '')
 	FROM product_families f JOIN brands b ON b.id=f.brand_id LEFT JOIN family_best fb ON fb.family_id=f.id`
 
 type FamilyFilter struct {
@@ -287,7 +290,7 @@ func (s *Store) ListFamilies(ctx context.Context, f FamilyFilter) ([]FamilyRow, 
 		where = append(where, "$"+itoa(len(args))+" = ANY(f.category_path)")
 	}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		where = append(where, ParseIntent(q, s.brandNames(ctx)).conds(&args, false)...)
+		where = append(where, ParseIntentDict(q, s.brandNames(ctx), s.finishDict(ctx)).conds(&args, false)...)
 	}
 	w := " WHERE " + strings.Join(where, " AND ")
 	var total int

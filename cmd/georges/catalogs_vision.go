@@ -27,7 +27,7 @@ import (
 func catalogsVisionCmd() *cobra.Command {
 	var brand, model, labels, rank string
 	var limit, threads, top int
-	var all, dry, eval, reclassify, spec bool
+	var all, dry, eval, reclassify, spec, tone, scene, fit bool
 	var mix float32
 	var show []string
 	cmd := &cobra.Command{
@@ -41,6 +41,15 @@ func catalogsVisionCmd() *cobra.Command {
 				return err
 			}
 			defer enc.Close()
+			if tone {
+				return runTone(ctx, cfg.DatabaseURL, enc, brand, mix, dry)
+			}
+			if scene {
+				return runScene(ctx, cfg.DatabaseURL, enc, brand, dry)
+			}
+			if fit {
+				return runFit(ctx, cfg.DatabaseURL, enc, brand, dry)
+			}
 			medium, err := enc.NewHead(ctx, vision.MediumClasses)
 			if err != nil {
 				return err
@@ -287,6 +296,9 @@ func catalogsVisionCmd() *cobra.Command {
 	cmd.Flags().StringVar(&rank, "rank", "", "with --reclassify: print the crops the medium head finds most likely to be this class (label mining)")
 	cmd.Flags().IntVar(&top, "top", 60, "how many crops --rank prints")
 	cmd.Flags().BoolVar(&spec, "spec", false, "classify spec-sheet images (product_images source='spec') instead of catalog crops")
+	cmd.Flags().BoolVar(&tone, "tone", false, "score the metal tone (silver | gold | bronze | black | white | copper) of every photo crop from its stored embedding; no image work (--mix 0 = prompts only)")
+	cmd.Flags().BoolVar(&scene, "scene", false, "score every photo crop as product vs room scene from its stored embedding (catalog_crops.vscene); no image work")
+	cmd.Flags().BoolVar(&fit, "fit", false, "score how well each candidate card picture fits its family's name (crop_fit); no image work")
 	cmd.Flags().StringSliceVar(&show, "show", nil, "classify these image files and print the top classes")
 	return cmd
 }
@@ -417,3 +429,107 @@ func runEval(medium, subject *vision.Head, labelled []vision.Label, embs [][]flo
 
 var _ = context.Background
 var _ = os.Open
+
+// runTone scores every photo crop's metal tone from its stored embedding: zero-shot prompts
+// mixed with prototypes from crops linked to SKUs of a known finish (and a linear probe on
+// them when there are enough). Vendor images take the tone of their SKU's finish directly.
+func runTone(ctx context.Context, dbURL string, enc *vision.Encoder, brand string, mix float32, dry bool) error {
+	st, err := store.Open(ctx, dbURL)
+	if err != nil {
+		return err
+	}
+	defer st.Close()
+	head, err := enc.NewHead(ctx, vision.ToneClasses)
+	if err != nil {
+		return err
+	}
+	ex, err := st.ToneExamples(ctx, enc.Model, 400)
+	if err != nil {
+		return err
+	}
+	byClass := map[string][][]float32{}
+	var embs [][]float32
+	var labels []string
+	for _, e := range ex {
+		byClass[e.Group] = append(byClass[e.Group], e.Emb)
+		embs = append(embs, e.Emb)
+		labels = append(labels, e.Group)
+	}
+	counts := map[string]int{}
+	for k, v := range byClass {
+		counts[k] = len(v)
+	}
+	// vendor images of a known finish are the check set: zero-shot accuracy first, then with
+	// their prototypes mixed in (held out five ways) when --mix asks for it
+	zero := 0
+	confusion := map[string]map[string]int{}
+	for i, e := range embs {
+		t, _, _ := head.Classify(e)
+		if t == labels[i] {
+			zero++
+		}
+		if confusion[labels[i]] == nil {
+			confusion[labels[i]] = map[string]int{}
+		}
+		confusion[labels[i]][t]++
+	}
+	fmt.Printf("%d vendor images of a known finish: %v\n", len(ex), counts)
+	if len(ex) > 0 {
+		fmt.Printf("zero-shot accuracy on them: %.1f%%\n", 100*float64(zero)/float64(len(ex)))
+		for truth, row := range confusion {
+			fmt.Printf("  %-7s → %v\n", truth, row)
+		}
+	}
+	if len(ex) >= 50 && mix > 0 {
+		head.SetPrototypes(byClass, mix)
+		ev := head.CrossValidate(embs, labels, make([]string, len(embs)), 5, 0, 1)
+		fmt.Printf("5-fold accuracy with prototypes (mix %.1f): %.1f%%\n", mix, 100*ev.Accuracy())
+	}
+	start := time.Now()
+	verdicts := map[string]int{}
+	var pending []store.CropTone
+	n := 0
+	flush := func() error {
+		if len(pending) == 0 || dry {
+			pending = pending[:0]
+			return nil
+		}
+		err := st.SaveCropTones(ctx, pending)
+		pending = pending[:0]
+		return err
+	}
+	err = st.PhotoEmbeddings(ctx, brand, enc.Model, func(e store.CropEmbedding) error {
+		t, sc, _ := head.Classify(e.Emb)
+		verdicts[t]++
+		if dry && n < 40 {
+			fmt.Printf("%-7s %.2f  %s\n", t, sc, e.Path)
+		}
+		pending = append(pending, store.CropTone{ID: e.ID, Tone: t, Score: sc})
+		n++
+		if len(pending) >= 500 {
+			return flush()
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	if err := flush(); err != nil {
+		return err
+	}
+	fmt.Printf("toned %d crops in %s: %v\n", n, time.Since(start).Round(time.Second), verdicts)
+	if dry {
+		return nil
+	}
+	set, err := st.RefreshImageTones(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("vendor images toned from their SKU finish: %d\n", set)
+	n2, err := st.RefreshFamilyTones(ctx)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("family card tones refreshed: %d changed\n", n2)
+	return nil
+}

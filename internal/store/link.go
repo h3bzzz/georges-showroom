@@ -270,6 +270,10 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		return err
 	}
 	// per-family search blob (see migration 00019); families are matched against it by Browse/ListFamilies
-	_, err = s.Pool.Exec(ctx, `SELECT refresh_family_blob()`)
+	if _, err = s.Pool.Exec(ctx, `SELECT refresh_family_blob()`); err != nil {
+		return err
+	}
+	// the tone of the picture each card now shows (finish queries rank on it)
+	_, err = s.RefreshFamilyTones(ctx)
 	return err
 }

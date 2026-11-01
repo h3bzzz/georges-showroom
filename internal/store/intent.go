@@ -19,6 +19,11 @@ type Concept struct {
 	Kind     string   // finish | type | word | sku
 	Label    string   // what the user typed, for the "understood as" line
 	Patterns []string // any of these substrings satisfies the concept
+	// finish concepts resolved through the finish dictionary (see finishdict.go)
+	Names  []string // real finish names the words stand for, best first
+	Exact  []string // the subset whose canonical tokens equal the query's
+	Tones  []string // tones asked for (bronze; or chrome, nickel, stainless… for "silver")
+	Groups []string // what a photograph of those tones looks like (vtone classes)
 }
 
 type Intent struct {
@@ -143,15 +148,6 @@ var phrases = map[string][]string{
 	"pull out":         {"pull-out", "pull out", "pullout"},
 	"free standing":    {"freestanding", "free standing", "floor mount"},
 	"floor mount":      {"floor mount", "floor-mount", "freestanding"},
-	"rose gold":        {"rose gold", "rosegold", "copper"},
-	"gun metal":        {"gun metal", "gunmetal"},
-	"oil rubbed":       {"oil rubbed", "rubbed bronze"},
-	"satin nickel":     {"satin nickel", "brushed nickel"},
-	"brushed nickel":   {"brushed nickel", "satin nickel"},
-	"polished nickel":  {"polished nickel"},
-	"polished chrome":  {"polished chrome", "chrome"},
-	"matte black":      {"matte black", "flat black", "matt black"},
-	"stainless steel":  {"stainless"},
 	"water closet":     {"toilet", "water closet"},
 }
 
@@ -174,7 +170,13 @@ func singular(w string) string {
 }
 
 // ParseIntent turns a free-text query into concepts. brands maps lower-case brand name → slug.
-func ParseIntent(q string, brands map[string]string) Intent {
+// Without a finish dictionary, finish words match by substring families (tests, tooling).
+func ParseIntent(q string, brands map[string]string) Intent { return ParseIntentDict(q, brands, nil) }
+
+// ParseIntentDict is ParseIntent with the finish dictionary: a run of finish words ("antique
+// rubbed bronze", "brushed nickel", "matte black") becomes one finish concept resolved to the
+// real finish names that share its tone and do not contradict its treatment.
+func ParseIntentDict(q string, brands map[string]string, dict *FinishDict) Intent {
 	var in Intent
 	lq := strings.ToLower(strings.TrimSpace(q))
 	lq = strings.NewReplacer("“", "", "”", "", "\"", "", ",", " ", "/", " ").Replace(lq)
@@ -203,6 +205,12 @@ func ParseIntent(q string, brands map[string]string) Intent {
 	for i := 0; i < len(words); i++ {
 		w := strings.Trim(words[i], "-–—.:;()")
 		if w == "" {
+			continue
+		}
+		// a run of finish language anchored by a tone or treatment word is one finish concept
+		if j := finishRun(words, i); j > i {
+			in.Concepts = append(in.Concepts, finishConcept(words[i:j], dict))
+			i = j - 1
 			continue
 		}
 		if i+1 < len(words) {
@@ -243,12 +251,81 @@ func ParseIntent(q string, brands map[string]string) Intent {
 	return in
 }
 
-func kindFor(phrase string) string {
-	switch phrase {
-	case "rose gold", "gun metal", "oil rubbed", "satin nickel", "brushed nickel", "polished nickel", "polished chrome", "matte black", "stainless steel":
-		return "finish"
+func kindFor(string) string { return "type" }
+
+// finishRun returns the end (exclusive) of the finish phrase starting at words[i], or i when
+// the words there are not finish language. Stop words inside the run ("in", "and") are kept
+// only between finish words, never at the end.
+func finishRun(words []string, i int) int {
+	j, anchored, last := i, false, i
+	if !finishStart(strings.Trim(words[i], "-–—.:;()")) {
+		return i
 	}
-	return "type"
+	for j < len(words) {
+		w := strings.Trim(words[j], "-–—.:;()")
+		if !finishVocab(w) {
+			break
+		}
+		if finishAnchor(w) {
+			anchored = true
+			last = j + 1
+		} else if !finishModifiers[w] {
+			last = j + 1
+		}
+		j++
+	}
+	if !anchored {
+		return i
+	}
+	return last
+}
+
+// finishConcept resolves a run of finish words through the dictionary. Patterns (the blob
+// regex, index-friendly) are the resolved names; without a dictionary, or when nothing in
+// stock matches, the legacy substring families of each word stand in.
+func finishConcept(words []string, dict *FinishDict) Concept {
+	clean := make([]string, 0, len(words))
+	for _, w := range words {
+		if w = strings.Trim(w, "-–—.:;()"); w != "" {
+			clean = append(clean, w)
+		}
+	}
+	ask := askFor(clean)
+	c := Concept{Kind: "finish", Label: ask.Label, Tones: ask.Tones, Groups: ToneGroups(ask.Tones)}
+	if dict != nil {
+		r := dict.Resolve(ask)
+		c.Names, c.Exact = r.Names, r.Exact
+		for _, n := range r.Names {
+			if len(n) >= 4 { // "G" or "Ash" would match every blob
+				c.Patterns = append(c.Patterns, strings.ToLower(n))
+			}
+		}
+	}
+	if len(c.Patterns) == 0 {
+		seen := map[string]bool{}
+		for _, w := range clean {
+			for _, p := range finishFamilies[w] {
+				if !seen[p] {
+					c.Patterns = append(c.Patterns, p)
+					seen[p] = true
+				}
+			}
+		}
+		if len(c.Patterns) == 0 {
+			c.Patterns = []string{strings.Join(clean, " ")}
+		}
+	}
+	return c
+}
+
+// FinishConcept returns the query's finish concept, if any.
+func (in Intent) FinishConcept() *Concept {
+	for i := range in.Concepts {
+		if in.Concepts[i].Kind == "finish" {
+			return &in.Concepts[i]
+		}
+	}
+	return nil
 }
 
 func normalizeSKU(s string) string {
@@ -267,9 +344,12 @@ func (in Intent) Explain() string {
 	for _, c := range in.Concepts {
 		switch c.Kind {
 		case "finish":
-			if l, ok := finishLabels[c.Label]; ok {
-				parts = append(parts, l)
-			} else {
+			switch {
+			case len(c.Names) > 0:
+				parts = append(parts, finishNamesLabel(c))
+			case finishLabels[c.Label] != "":
+				parts = append(parts, finishLabels[c.Label])
+			default:
 				parts = append(parts, c.Label+" finish")
 			}
 		case "type":
@@ -287,6 +367,24 @@ func (in Intent) Explain() string {
 		parts = append(parts, in.Room)
 	}
 	return strings.Join(parts, " · ")
+}
+
+// finishNamesLabel: "Oil Rubbed Bronze, Antique Bronze, Venetian Bronze + 9 more bronze finishes".
+func finishNamesLabel(c Concept) string {
+	lead := c.Exact
+	if len(lead) == 0 {
+		lead = c.Names
+	}
+	n := min(3, len(lead))
+	s := strings.Join(lead[:n], ", ")
+	if rest := len(c.Names) - n; rest > 0 {
+		tone := ""
+		if len(c.Tones) == 1 {
+			tone = c.Tones[0] + " "
+		}
+		s += fmt.Sprintf(" + %d more %sfinishes", rest, tone)
+	}
+	return s
 }
 
 // regexAlt joins patterns into one case-insensitive alternation; pg_trgm answers it from the
@@ -336,6 +434,18 @@ func (in Intent) condsStrict(args *[]any, anyWord, anyFinish, strictType bool) [
 	var groups []string
 	for _, c := range in.Concepts {
 		pats := c.Patterns
+		if c.Kind == "finish" && len(c.Names) > 0 {
+			// resolved names: a SKU in one of them. (Matching the names in the family text as well
+			// looked harmless but cost 900 ms: a 24-way regex defeats the trigram index. The
+			// blob still carries every finish name, so text-only hits are the finish:any tier.)
+			*args = append(*args, c.Names)
+			g := fmt.Sprintf("f.id IN (SELECT p.family_id FROM products p WHERE p.finish = ANY($%d)", len(*args))
+			if anyFinish {
+				g += " UNION SELECT x.family_id FROM family_best x WHERE x.blob LIKE '%finish:any%'"
+			}
+			groups = append(groups, g+")")
+			continue
+		}
 		if c.Kind == "finish" && anyFinish {
 			pats = append(append([]string{}, pats...), "finish:any") // unknown finish: still a candidate
 		}
@@ -388,15 +498,28 @@ func (in Intent) WantsParts() bool {
 // a finished fixture outranks a rough-in or part unless the shopper asked for parts. A finish
 // match alone ("brushed nickel") is worth less than the fixture/part distinction, so a brushed
 // nickel faucet whose finish is unknown still beats a rough valve that lists -BN.
-func (in Intent) relevance(args *[]any) string {
+func (in Intent) relevance(args *[]any) string { return in.relevanceOpt(args, true) }
+
+// relevanceOpt without the tier term: a finish query sorts the picture before the tier (a
+// bronze-pictured towel ring beats a chrome-pictured faucet), parts still last.
+func (in Intent) relevanceOpt(args *[]any, withTier bool) string {
 	var terms []string
-	if !in.WantsParts() {
+	if withTier && !in.WantsParts() {
 		terms = append(terms, "((2 - f.tier) * 4)")
 	}
 	for _, c := range in.Concepts {
 		w := 2
 		if c.Kind == "type" {
 			w = 4
+		}
+		if c.Kind == "finish" && len(c.Names) > 0 {
+			// stocked in the finish asked for (or a sister finish of the same tone and
+			// treatment) outranks a family whose finish is unknown; the exact name is a later
+			// sort key in rankFamilies, after the picture, so a chrome photograph of an Oil
+			// Rubbed Bronze faucet does not beat a bronze photograph of a Venetian Bronze one
+			*args = append(*args, c.Names)
+			terms = append(terms, fmt.Sprintf("(CASE WHEN EXISTS (SELECT 1 FROM products p WHERE p.family_id=f.id AND p.finish = ANY($%d)) THEN 3 ELSE 0 END)", len(*args)))
+			continue
 		}
 		if c.Kind == "finish" {
 			// a family that really comes in the finish outranks one whose finish is unknown

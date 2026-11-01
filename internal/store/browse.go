@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -39,9 +40,10 @@ type FacetValue struct {
 }
 
 type BrowseResult struct {
-	Widened       bool   // query fell back to any-word matching
-	FinishWidened bool   // strict finish matches were few; unknown-finish families included too
-	Understood    string // "faucets · silver finishes (chrome, nickel, …)"
+	Widened       bool     // query fell back to any-word matching
+	FinishWidened bool     // strict finish matches were few; unknown-finish families included too
+	Understood    string   // "faucets · silver finishes (chrome, nickel, …)"
+	FinishNames   []string // real finish names the query resolved to (chips under the title)
 	Items         []FamilyRow
 	Total         int
 	Categories    []FacetValue
@@ -97,11 +99,14 @@ func (s *Store) Browse(ctx context.Context, f BrowseFilter) (*BrowseResult, erro
 	}
 	res := &BrowseResult{}
 	if q := strings.TrimSpace(f.Query); q != "" {
-		f.Intent = ParseIntent(q, s.brandNames(ctx))
+		f.Intent = ParseIntentDict(q, s.brandNames(ctx), s.finishDict(ctx))
 		if f.Room != "" {
 			f.Intent.Room = "" // the URL room wins; "kitchen faucet" on the kitchen page is not a second filter
 		}
 		res.Understood = f.Intent.Explain()
+		if fc := f.Intent.FinishConcept(); fc != nil {
+			res.FinishNames = fc.Names
+		}
 	}
 	from := browseFrom
 
@@ -147,39 +152,11 @@ func (s *Store) Browse(ctx context.Context, f BrowseFilter) (*BrowseResult, erro
 		res.Widened = true
 	}
 
-	// Featured: premier fixtures before parts, families with a photo first (sharp ≥400 px ones,
-	// i.e. HD or large native crops, ahead of small ones), then a stable per-family shuffle so
-	// the first page mixes brands instead of walking the alphabet
-	bucket := "f.tier, (fb.photo_path IS NULL)"
-	rel := ""
-	if len(f.Intent.Concepts) > 0 {
-		rel = "(" + f.Intent.relevance(&args) + ") DESC, "
-	}
-	// inside a tile, the families that *are* the category lead (see categoryCore)
-	if core := CategoryCore(f.Category); f.Category != "" && core != "" {
-		args = append(args, `\m(`+core+`)`)
-		rel += fmt.Sprintf("(COALESCE(f.title,'') ~* $%d) DESC, ", len(args))
-	}
-	// round-robin inside a bucket: a brand gets 2 slots per round and a brand+title 1, so one
-	// book cannot flood a page (Brizo alone prints 2,400 families) and pagination stays
-	// consistent; sharp (≥400 px) photos lead each round
-	order := rel + bucket + ", GREATEST((row_number() OVER (PARTITION BY " + bucket + ", f.brand_id ORDER BY (COALESCE(fb.photo_w,0) < 400), hashtext(f.id::text)) - 1) / 2," +
-		" row_number() OVER (PARTITION BY " + bucket + ", f.brand_id, lower(f.title) ORDER BY (COALESCE(fb.photo_w,0) < 400), hashtext(f.id::text)) - 1)," +
-		" (COALESCE(fb.photo_w,0) < 400), hashtext(f.id::text)"
-	switch f.Sort {
-	case "price_asc":
-		order = "(SELECT min(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) NULLS LAST, f.title"
-	case "price_desc":
-		order = "(SELECT max(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) DESC NULLS LAST, f.title"
-	case "name":
-		order = "f.title, b.name"
-	}
-	pargs := append(append([]any{}, args...), f.PerPage, (f.Page-1)*f.PerPage)
-	rows, err := s.Pool.Query(ctx, familySelect+w+" ORDER BY "+order+fmt.Sprintf(" LIMIT $%d OFFSET $%d", len(pargs)-1, len(pargs)), pargs...)
+	ids, err := s.rankFamilies(ctx, f, w, args)
 	if err != nil {
 		return nil, err
 	}
-	if res.Items, err = pgx.CollectRows(rows, pgx.RowToStructByPos[FamilyRow]); err != nil {
+	if res.Items, err = s.familiesByIDs(ctx, ids); err != nil {
 		return nil, err
 	}
 	// when the shopper asked for a finish, show each family in that finish where a crop exists
@@ -189,14 +166,7 @@ func (s *Store) Browse(ctx context.Context, f BrowseFilter) (*BrowseResult, erro
 			res.Items[i].ImageFinish = ""
 		}
 	} else {
-		var rx string
-		for _, c := range f.Intent.Concepts {
-			if c.Kind == "finish" {
-				rx = regexAlt(c.Patterns)
-				break
-			}
-		}
-		_ = s.preferFinishImages(ctx, res.Items, f.Finishes, rx)
+		_ = s.preferFinishImages(ctx, res.Items, f.Finishes, f.Intent.FinishConcept())
 	}
 	// sister families extracted from the same price-book line share one crop and title; show
 	// each picture once per page
@@ -317,46 +287,253 @@ func (s *Store) ReassignRooms(ctx context.Context) (int, error) {
 	return n, nil
 }
 
-// preferFinishImages swaps each family's card image for a crop linked to a SKU in one of the
-// wanted finishes (exact names from the facet, or a regex from the query), when one exists.
-func (s *Store) preferFinishImages(ctx context.Context, items []FamilyRow, exact []string, rx string) error {
+// rankFamilies orders every family the filter matches and returns one page of ids. Ranking
+// runs over a slim projection (relevance, tier, image fit, brand, a stable hash) so the heavy
+// card columns are fetched for 24 rows only.
+//
+// Featured order: relevance (type/category hits, the finish asked for, fixtures before parts),
+// families with any photo before none, then a brand round-robin so no book floods a page: a
+// finish query gives every brand one slot per round, other pages two, and a repeated title
+// inside a brand waits three rounds. Inside a brand the families whose picture shows the
+// finish asked for come first (a vendor master in it, or a crop whose metal reads as that
+// tone), then sharp (≥400 px) photos.
+func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, args []any) ([]int64, error) {
+	finishAsked := len(f.Finishes) > 0
+	if fc := f.Intent.FinishConcept(); fc != nil && len(fc.Names) > 0 {
+		finishAsked = true
+	}
+	rel := "0"
+	if len(f.Intent.Concepts) > 0 {
+		// a finish query ranks the picture before the tier; parts (tier 2) stay last
+		rel = f.Intent.relevanceOpt(&args, !finishAsked)
+	}
+	parts := "f.tier"
+	if finishAsked && !f.Intent.WantsParts() {
+		parts = "(f.tier = 2)"
+	}
+	core := "FALSE"
+	if c := CategoryCore(f.Category); f.Category != "" && c != "" {
+		args = append(args, `\m(`+c+`)`)
+		core = fmt.Sprintf("(COALESCE(f.title,'') ~* $%d)", len(args))
+	}
+	fit, xact, slots := "0", "FALSE", 2
+	if fc := f.Intent.FinishConcept(); fc != nil && len(fc.Names) > 0 {
+		slots = 1
+		fit = imageFit(&args, fc.Names, fc.Groups)
+		if len(fc.Exact) > 0 {
+			args = append(args, fc.Exact)
+			xact = fmt.Sprintf("EXISTS (SELECT 1 FROM products p WHERE p.family_id=f.id AND p.finish = ANY($%d))", len(args))
+		}
+	} else if len(f.Finishes) > 0 {
+		slots = 1
+		fit = imageFit(&args, f.Finishes, s.finishDict(ctx).groupsFor(f.Finishes))
+	}
+	// brand balance first, then the picture: every round seats each brand's best-fitting
+	// family, so one book with bronze photographs of everything (Emtek) cannot fill the page.
+	// A family whose only picture shows another metal (fit -1) waits behind every round.
+	order := fmt.Sprintf("rel DESC, core DESC, parts, nophoto, (fit < 0), GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, tier, small, h", slots)
+	if finishAsked {
+		// a finish page never opens with a picture of another metal, whatever the type or
+		// category score ("brushed nickel faucet": a category hit in a brass photograph waits)
+		order = fmt.Sprintf("(fit < 0), rel DESC, core DESC, parts, nophoto, GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, tier, small, h", slots)
+	}
+	switch f.Sort {
+	case "price_asc":
+		order = "lo NULLS LAST, title"
+	case "price_desc":
+		order = "hi DESC NULLS LAST, title"
+	case "name":
+		order = "title, brand"
+	}
+	args = append(args, f.PerPage, (f.Page-1)*f.PerPage)
+	q := fmt.Sprintf(`WITH r AS (
+		  SELECT f.id, (%s) AS rel, %s AS core, f.tier, %s AS parts, (fb.photo_path IS NULL) AS nophoto, (%s) AS fit, (%s) AS xact,
+		    f.brand_id, b.name AS brand, lower(COALESCE(f.title,'')) AS title,
+		    (COALESCE(fb.photo_w,0) < 400) AS small, hashtext(f.id::text) AS h,
+		    (SELECT min(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) AS lo,
+		    (SELECT max(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) AS hi
+		  %s%s),
+		o AS (
+		  SELECT r.*,
+		    row_number() OVER (PARTITION BY rel, core, parts, nophoto, (fit < 0), brand_id ORDER BY fit DESC, xact DESC, tier, small, h) AS rb,
+		    row_number() OVER (PARTITION BY rel, core, parts, nophoto, (fit < 0), brand_id, title ORDER BY fit DESC, xact DESC, tier, small, h) AS rt
+		  FROM r)
+		SELECT id, rel, tier, nophoto, fit, xact, GREATEST((rb-1)/%d, (rt-1)*3) AS round, brand FROM o ORDER BY %s LIMIT $%d OFFSET $%d`,
+		rel, core, parts, fit, xact, browseFrom, where, slots, order, len(args)-1, len(args))
+	rows, err := s.Pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	type ranked struct {
+		ID      int64
+		Rel     int
+		Tier    int
+		NoPhoto bool
+		Fit     int
+		Exact   bool
+		Round   int
+		Brand   string
+	}
+	rs, err := pgx.CollectRows(rows, pgx.RowToStructByPos[ranked])
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(rs))
+	for _, r := range rs {
+		if os.Getenv("RANK_DEBUG") != "" {
+			fmt.Printf("rank %d rel=%d tier=%d nophoto=%v fit=%d exact=%v round=%d %s\n", r.ID, r.Rel, r.Tier, r.NoPhoto, r.Fit, r.Exact, r.Round, r.Brand)
+		}
+		ids = append(ids, r.ID)
+	}
+	return ids, nil
+}
+
+// imageFit is the SQL for how well a family's pictures fit the finish asked for: 2 when a
+// vendor master of a SKU in that finish exists, 1 when some crop of the family (or the
+// picture shown) reads as the asked tone, 0 when the tone of the shown picture is unknown,
+// -1 when the only picture shows another metal (a brass mirror on a brushed-nickel page).
+func imageFit(args *[]any, names, groups []string) string {
+	*args = append(*args, names, groups)
+	n, g := len(*args)-1, len(*args)
+	return fmt.Sprintf(`(CASE
+		  WHEN EXISTS (SELECT 1 FROM product_images pi JOIN products p ON p.id=pi.product_id
+		               WHERE p.family_id=f.id AND p.finish = ANY($%[1]d) AND pi.path IS NOT NULL AND pi.path NOT LIKE 'miss:%%') THEN 2
+		  WHEN EXISTS (SELECT 1 FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id
+		               WHERE fc.family_id=f.id AND cc.kind='photo' AND cc.vtone = ANY($%[2]d) AND COALESCE(cc.vtonescore,0) >= 0.5
+		                 AND COALESCE(cc.quality,0) >= 0.3 AND cc.w >= 120 AND cc.h >= 120) THEN 1
+		  WHEN fb.photo_tone IS NULL OR fb.photo_tone='other' THEN 0
+		  WHEN fb.photo_tone = ANY($%[2]d) THEN 1
+		  ELSE -1 END)`, n, g)
+}
+
+// familiesByIDs hydrates card rows in the given order.
+func (s *Store) familiesByIDs(ctx context.Context, ids []int64) ([]FamilyRow, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := s.Pool.Query(ctx, familySelect+" WHERE f.id = ANY($1)", ids)
+	if err != nil {
+		return nil, err
+	}
+	got, err := pgx.CollectRows(rows, pgx.RowToStructByPos[FamilyRow])
+	if err != nil {
+		return nil, err
+	}
+	by := make(map[int64]FamilyRow, len(got))
+	for _, r := range got {
+		by[r.ID] = r
+	}
+	out := make([]FamilyRow, 0, len(ids))
+	for _, id := range ids {
+		if r, ok := by[id]; ok {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+// groupsFor folds facet finish names into the tones a photograph shows.
+func (d *FinishDict) groupsFor(names []string) []string {
+	var tones []string
+	for _, n := range names {
+		if e := d.Entry(n); e != nil {
+			tones = append(tones, e.Tones...)
+		}
+	}
+	return ToneGroups(tones)
+}
+
+// preferFinishImages swaps each family's card image for one that shows the finish asked for
+// (exact names from the facet, or the resolved names and tones of the query): a vendor master
+// of a SKU in that finish, then a catalog crop linked to such a SKU, then any crop of the
+// family whose metal the vision pass read as that tone. ImageMatch records what the card
+// shows: exact (the finish itself), tone (the right colour of metal), other (a different
+// tone, named in ImageTone) or "" (unknown).
+func (s *Store) preferFinishImages(ctx context.Context, items []FamilyRow, exact []string, fc *Concept) error {
 	if len(items) == 0 {
 		return nil
+	}
+	dict := s.finishDict(ctx)
+	names, groups := exact, []string(nil)
+	if fc != nil {
+		names = append(append([]string{}, names...), fc.Names...)
+		groups = fc.Groups
+	}
+	if len(exact) > 0 {
+		groups = append(groups, dict.groupsFor(exact)...)
 	}
 	ids := make([]int64, 0, len(items))
 	for _, it := range items {
 		ids = append(ids, it.ID)
 	}
-	if rx == "" {
-		rx = "^$"
-	}
 	rows, err := s.Pool.Query(ctx, `
-		SELECT DISTINCT ON (fc.family_id) fc.family_id, COALESCE(cc.hd_path, cc.path), COALESCE(cc.hd_w, cc.w), p.finish
-		FROM family_crops fc
-		JOIN catalog_crops cc ON cc.id=fc.crop_id AND cc.kind='photo'
-		JOIN products p ON p.family_id=fc.family_id AND (p.sku=cc.sku OR (cc.base_n IS NOT NULL AND p.sku_n=cc.base_n))
-		WHERE fc.family_id = ANY($1) AND COALESCE(p.finish,'')<>'' AND (p.finish = ANY($2) OR p.finish ~* $3)
-		  AND COALESCE(cc.quality,0) >= 0.3 AND cc.w >= 120 AND cc.h >= 120
-		ORDER BY fc.family_id, COALESCE(cc.quality,0.3) DESC, cc.w*cc.h DESC`, ids, exact, rx)
+		SELECT DISTINCT ON (family_id) family_id, path, w, finish, how FROM (
+		  SELECT p.family_id, pi.path, COALESCE(pi.width,0) AS w, p.finish, 'exact' AS how, 3.0 AS score
+		  FROM product_images pi JOIN products p ON p.id=pi.product_id
+		  WHERE p.family_id = ANY($1) AND p.finish = ANY($2) AND pi.path IS NOT NULL AND pi.path NOT LIKE 'miss:%'
+		  UNION ALL
+		  SELECT fc.family_id, COALESCE(cc.hd_path, cc.path), COALESCE(cc.hd_w, cc.w), p.finish, 'exact', 2 + COALESCE(cc.quality,0.3)
+		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id AND cc.kind='photo'
+		  JOIN products p ON p.family_id=fc.family_id AND (p.sku=cc.sku OR (cc.base_n IS NOT NULL AND p.sku_n=cc.base_n))
+		  WHERE fc.family_id = ANY($1) AND p.finish = ANY($2) AND COALESCE(cc.quality,0) >= 0.3 AND cc.w >= 120 AND cc.h >= 120
+		    -- a price book prints one photo per model whatever the SKU's finish: the camera has the last word
+		    AND (cc.vtone IS NULL OR cc.vtone='other' OR COALESCE(cc.vtonescore,0) < 0.5 OR cc.vtone = ANY($3))
+		  UNION ALL
+		  SELECT fc.family_id, COALESCE(cc.hd_path, cc.path), COALESCE(cc.hd_w, cc.w), '', 'tone', 1 + COALESCE(cc.quality,0.3)
+		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id AND cc.kind='photo'
+		  WHERE fc.family_id = ANY($1) AND cc.vtone = ANY($3) AND COALESCE(cc.vtonescore,0) >= 0.5
+		    AND COALESCE(cc.quality,0) >= 0.3 AND cc.w >= 120 AND cc.h >= 120
+		) x ORDER BY family_id, score DESC, w DESC`, ids, names, groups)
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
-	best := map[int64][3]string{}
+	type pick struct {
+		path, finish, how string
+		w                 int
+	}
+	best := map[int64]pick{}
 	for rows.Next() {
 		var id int64
-		var path, finish string
-		var w int
-		if err := rows.Scan(&id, &path, &w, &finish); err != nil {
+		var p pick
+		if err := rows.Scan(&id, &p.path, &p.w, &p.finish, &p.how); err != nil {
 			return err
 		}
-		best[id] = [3]string{path, fmt.Sprint(w), finish}
+		best[id] = p
+	}
+	inGroups := func(t string) bool {
+		for _, g := range groups {
+			if g == t {
+				return true
+			}
+		}
+		return false
 	}
 	for i := range items {
-		if b, ok := best[items[i].ID]; ok {
-			items[i].Image = "/files/" + b[0]
-			items[i].ImageW = atoiDefault(b[1])
-			items[i].ImageFinish = b[2]
+		it := &items[i]
+		if p, ok := best[it.ID]; ok {
+			it.Image = "/files/" + p.path
+			it.ImageW = p.w
+			it.ImageFinish = p.finish
+			it.ImageMatch = p.how
+			if p.how == "tone" {
+				it.ImageTone = ""
+			}
+			continue
+		}
+		if it.ImageFinish != "" && it.ImageTone == "" {
+			// the shown crop belongs to a SKU of a known finish: that finish's tone
+			if e := dict.Entry(it.ImageFinish); e != nil && e.Head != "" {
+				it.ImageTone = ToneGroup(e.Head)
+			}
+		}
+		switch {
+		case it.ImageTone != "" && it.ImageTone != "other" && !inGroups(it.ImageTone):
+			it.ImageMatch = "other" // whatever SKU the crop is linked to, it shows another metal
+		case it.ImageFinish != "" && contains(names, it.ImageFinish):
+			it.ImageMatch = "exact"
+		case it.ImageTone != "" && inGroups(it.ImageTone):
+			it.ImageMatch = "tone"
 		}
 	}
 	return nil

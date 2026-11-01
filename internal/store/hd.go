@@ -75,7 +75,13 @@ func (s *Store) PromoteHD(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return t1.RowsAffected() + t2.RowsAffected(), nil
+	// curated covers (room banners, category and home tiles) follow their crop to HD as well
+	t3, err := s.Pool.Exec(ctx, `UPDATE covers cv SET path=cc.hd_path
+		FROM catalog_crops cc WHERE cv.path=cc.path AND cc.hd_path IS NOT NULL`)
+	if err != nil {
+		return 0, err
+	}
+	return t1.RowsAffected() + t2.RowsAffected() + t3.RowsAffected(), nil
 }
 
 // HDStats reports progress for the upscale job.
@@ -86,4 +92,61 @@ func (s *Store) HDStats(ctx context.Context) (done, failed, shownSmall int, err 
 		(SELECT count(*) FROM family_best fb JOIN catalog_crops cc ON cc.path=fb.photo_path WHERE cc.w < 500 AND cc.hd_w IS NULL)`).
 		Scan(&done, &failed, &shownSmall)
 	return
+}
+
+// HDPair is a crop with its HD copy, for the audit.
+type HDPair struct {
+	ID     int64
+	Path   string
+	HDPath string
+	W, H   int
+	HDW    int
+	Shown  bool // some family or cover shows the HD copy today
+}
+
+// HDPairs lists crops that have an HD copy (optionally one brand).
+func (s *Store) HDPairs(ctx context.Context, brandCode string) ([]HDPair, error) {
+	rows, err := s.Pool.Query(ctx, `
+		SELECT cc.id, cc.path, cc.hd_path, cc.w, cc.h, cc.hd_w,
+		  EXISTS (SELECT 1 FROM family_best fb WHERE fb.photo_path=cc.hd_path OR fb.drawing_path=cc.hd_path)
+		  OR EXISTS (SELECT 1 FROM covers cv WHERE cv.path=cc.hd_path)
+		FROM catalog_crops cc JOIN catalogs c ON c.id=cc.catalog_id
+		WHERE cc.hd_path IS NOT NULL AND ($1='' OR c.brand_code=$1)
+		ORDER BY cc.id`, brandCode)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[HDPair])
+}
+
+// RevokeHD drops a corrupt HD copy: the crop keeps hd_w=-1 so the upscaler can be asked to
+// redo it (--redo), and every family photo, drawing and cover that showed the HD file goes
+// back to the native crop. Returns how many references were repointed.
+func (s *Store) RevokeHD(ctx context.Context, id int64) (int64, error) {
+	var n int64
+	for _, q := range []string{
+		`UPDATE family_best fb SET photo_path=cc.path, photo_w=cc.w FROM catalog_crops cc WHERE cc.id=$1 AND fb.photo_path=cc.hd_path`,
+		`UPDATE family_best fb SET drawing_path=cc.path FROM catalog_crops cc WHERE cc.id=$1 AND fb.drawing_path=cc.hd_path`,
+		`UPDATE covers cv SET path=cc.path FROM catalog_crops cc WHERE cc.id=$1 AND cv.path=cc.hd_path`,
+		`UPDATE catalog_crops SET hd_path=NULL, hd_w=-1 WHERE id=$1`,
+	} {
+		t, err := s.Pool.Exec(ctx, q, id)
+		if err != nil {
+			return n, err
+		}
+		n += t.RowsAffected()
+	}
+	return n - 1, nil
+}
+
+// ResetFailedHD lets the upscaler retry crops whose upscale failed or was revoked (hd_w=-1)
+// and returns them as candidates.
+func (s *Store) ResetFailedHD(ctx context.Context, brandCode string) ([]HDCandidate, error) {
+	rows, err := s.Pool.Query(ctx, `UPDATE catalog_crops cc SET hd_w=NULL FROM catalogs c
+		WHERE c.id=cc.catalog_id AND cc.hd_w=-1 AND cc.hd_path IS NULL AND ($1='' OR c.brand_code=$1)
+		RETURNING cc.id, cc.path, cc.w, cc.h, c.brand_code, c.name, cc.page, cc.x, cc.y`, brandCode)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[HDCandidate])
 }
