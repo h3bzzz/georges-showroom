@@ -286,7 +286,7 @@ templ ProductGrid(fams []store.FamilyRow, pg Pager) {
 	}
 }
 
-templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, imgs []string, pages []store.CatalogHit, drawings []string) {
+templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, imgs []string, pages []store.CatalogHit, drawings []string, sibs []store.FamilyRow) {
 	@Layout(f.BrandName + " " + f.Title) {
 		<nav class="text-xs text-neutral-500 mb-3 flex gap-2">
 			<a href={ templ.SafeURL("/brand/" + f.BrandSlug) } class="hover:underline">{ f.BrandName }</a>
@@ -390,6 +390,24 @@ templ Product(f store.FamilyRow, skus []store.ProductRow, docs []store.DocRow, i
 				}
 			</div>
 		</div>
+		if len(sibs) > 0 {
+			<section class="mt-10">
+				<div class="flex items-baseline justify-between gap-4 mb-3">
+					if f.Collection != "" {
+						<h2 class="font-semibold text-lg">Complete the { f.Collection } collection</h2>
+						<a class="text-sm hover:underline" style="color:var(--accent)" href={ templ.SafeURL("/shop?q=" + QEsc(f.BrandName + " " + f.Collection)) }>Everything in { f.Collection } →</a>
+					} else {
+						<h2 class="font-semibold text-lg">More { f.Category[0] } from { f.BrandName }</h2>
+						<a class="text-sm hover:underline" style="color:var(--accent)" href={ templ.SafeURL("/shop?category=" + QEsc(f.Category[0]) + "&brand=" + f.BrandSlug) }>All { f.Category[0] } by { f.BrandName } →</a>
+					}
+				</div>
+				<div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+					for _, s := range sibs {
+						@FamilyCard(s)
+					}
+				</div>
+			</section>
+		}
 	}
 }
 

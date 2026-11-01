@@ -1,4 +1,4 @@
-package views
+	if f.Category != "" || len(f.Brands) > 0 || len(f.Finishes) > 0 || len(f.Specs) > 0 || f.MinCents > 0 || f.MaxCents > 0 || f.Query != "" {package views
 
 import "georges_/internal/store"
 
@@ -135,6 +135,21 @@ templ Sidebar(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
 				</ul>
 			</div>
 		}
+		for _, sf := range r.Specs {
+			<div>
+				<h3 class="eyebrow mb-2">{ sf.Name }</h3>
+				<ul class="space-y-1">
+					for _, x := range sf.Values {
+						<li>
+							<a href={ templ.SafeURL(u.ToggleSpec(sf.Name, x.Value)) } class="flex items-center gap-2 py-0.5 hover:text-[color:var(--accent)]">
+								<span class={ "inline-block w-3.5 h-3.5 rounded-sm border", templ.KV("bg-[color:var(--slate)]", x.On) } style="border-color:var(--nickel)"></span>
+								<span class="flex-1">{ x.Label }</span><span class="num" style="color:var(--nickel)">{ Itoa(x.Count) }</span>
+							</a>
+						</li>
+					}
+				</ul>
+			</div>
+		}
 	</div>
 	</details>
 }
@@ -153,6 +168,11 @@ templ ActiveChips(f store.BrowseFilter, u ShopURL) {
 			}
 			for _, x := range f.Finishes {
 				<a href={ templ.SafeURL(u.ToggleFinish(x)) } class="chip">{ x } ×</a>
+			}
+			for k, vs := range f.Specs {
+				for _, x := range vs {
+					<a href={ templ.SafeURL(u.ToggleSpec(k, x)) } class="chip">{ k }: { x } ×</a>
+				}
 			}
 			if f.MinCents > 0 || f.MaxCents > 0 {
 				<a href={ templ.SafeURL(u.ClearPrice()) } class="chip">${ Dollars(f.MinCents) } – ${ Dollars(f.MaxCents) } ×</a>
@@ -174,6 +194,9 @@ templ ShopResults(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
 				}
 				if r.Widened {
 					<span class="ml-2">(nothing matched everything, showing any)</span>
+				}
+				if r.Corrected != "" {
+					<span class="ml-2">· showing results for <strong>“{ r.Corrected }”</strong> — <a class="hover:underline" style="color:var(--accent)" href={ templ.SafeURL(u.AsTyped(r.Original)) }>search instead for “{ r.Original }”</a></span>
 				}
 				if r.Total == 0 && f.Query != "" {
 					<span class="ml-2">— no products match; the header search also looks inside every catalog page</span>

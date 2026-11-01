@@ -18,9 +18,11 @@ type BrowseFilter struct {
 	Category   string   // exact element of category_path
 	Brands     []string // brand slugs
 	Finishes   []string
+	Specs      map[string][]string // attribute facets: key → any of these values ("Mounting" → Wall Mount)
 	MinCents   int64
 	MaxCents   int64
 	Query      string
+	Exact      bool   // search the words as typed; no spelling correction
 	StrictType bool   // type words retrieve by category membership instead of title text (set by Browse when that yields enough)
 	Sort       string // relevance | price_asc | price_desc | name
 	Page       int
@@ -42,6 +44,8 @@ type FacetValue struct {
 type BrowseResult struct {
 	Widened       bool     // query fell back to any-word matching
 	FinishWidened bool     // strict finish matches were few; unknown-finish families included too
+	Original      string   // the query as typed, when Corrected differs
+	Corrected     string   // the query after spelling correction ("brused nickle" → "brushed nickel")
 	Understood    string   // "faucets · silver finishes (chrome, nickel, …)"
 	FinishNames   []string // real finish names the query resolved to (chips under the title)
 	Items         []FamilyRow
@@ -49,6 +53,7 @@ type BrowseResult struct {
 	Categories    []FacetValue
 	Brands        []FacetValue
 	Finishes      []FacetValue
+	Specs         []Facet // attribute facets worth showing for this result set (specFacetKeys order)
 	MinCents      int64
 	MaxCents      int64
 }
@@ -78,6 +83,23 @@ func (f BrowseFilter) where(skip string) (string, []any) {
 	if len(f.Finishes) > 0 && skip != "finish" {
 		add("EXISTS (SELECT 1 FROM products p WHERE p.family_id=f.id AND p.finish = ANY(?))", f.Finishes)
 	}
+	if len(f.Specs) > 0 && skip != "spec" {
+		keys := make([]string, 0, len(f.Specs))
+		for k := range f.Specs {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			var ors []string
+			for _, v := range f.Specs[k] {
+				args = append(args, k, v)
+				ors = append(ors, fmt.Sprintf("f.attributes @> jsonb_build_object($%d::text, $%d::text)", len(args)-1, len(args)))
+			}
+			if len(ors) > 0 {
+				conds = append(conds, "("+strings.Join(ors, " OR ")+")")
+			}
+		}
+	}
 	if f.MinCents > 0 && skip != "price" {
 		add("(SELECT max(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) >= ?", f.MinCents)
 	}
@@ -100,6 +122,13 @@ func (s *Store) Browse(ctx context.Context, f BrowseFilter) (*BrowseResult, erro
 	res := &BrowseResult{}
 	if q := strings.TrimSpace(f.Query); q != "" {
 		f.Intent = ParseIntentDict(q, s.brandNames(ctx), s.finishDict(ctx))
+		if !f.Exact {
+			if fixed := s.correctQuery(ctx, q, f.Intent); fixed != "" && fixed != q {
+				res.Original, res.Corrected = q, fixed
+				f.Query = fixed
+				f.Intent = ParseIntentDict(fixed, s.brandNames(ctx), s.finishDict(ctx))
+			}
+		}
 		if f.Room != "" {
 			f.Intent.Room = "" // the URL room wins; "kitchen faucet" on the kitchen page is not a second filter
 		}
@@ -195,6 +224,10 @@ func (s *Store) Browse(ctx context.Context, f BrowseFilter) (*BrowseResult, erro
 	}
 	fw, fargs := f.where("finish")
 	res.Finishes, err = s.facet(ctx, "SELECT p.finish, p.finish, count(DISTINCT f.id)::int"+from+" JOIN products p ON p.family_id=f.id"+fw+" AND p.finish IS NOT NULL AND p.finish<>'' GROUP BY p.finish ORDER BY 3 DESC, 1 LIMIT 40", fargs, func(v string) bool { return contains(f.Finishes, v) })
+	if err != nil {
+		return nil, err
+	}
+	res.Specs, err = s.specFacets(ctx, f, from, res.Total)
 	return res, err
 }
 
@@ -560,4 +593,63 @@ func (s *Store) CountFamilies(ctx context.Context, f BrowseFilter) (int, error) 
 	var n int
 	err := s.Pool.QueryRow(ctx, "SELECT count(*)"+browseFrom+w, args...).Scan(&n)
 	return n, err
+}
+
+// specFacetKeys are the attribute keys offered as sidebar facets, in display order; a key is
+// shown when the result set carries it on enough families with at least two values.
+var specFacetKeys = []string{"Mounting", "Faucet Holes", "Centers", "Spout Reach", "Spout Height", "Material", "Flow Rate", "Valve Type",
+	"Handle Style", "Handles", "Spout Type", "Function", "Bowls", "Drain Location", "Overflow", "ADA Compliant", "Cartridge",
+	"Handing", "Keying", "Gauge", "Width", "Length", "Height", "Nominal Size", "Door Thickness", "Backset"}
+
+// specFacets counts the attribute values among the families the filter matches (ignoring the
+// spec filters themselves, so each facet shows what would match) and keeps the keys worth a
+// facet: two or more values, covering at least 3 % of the results, up to eight keys and eight
+// values each. Unilog's category pages stop at brand and price; a rep narrowing to wall-mount,
+// 8" centers or 1.2 gpm has only the spec sheets otherwise.
+func (s *Store) specFacets(ctx context.Context, f BrowseFilter, from string, total int) ([]Facet, error) {
+	if total == 0 {
+		return nil, nil
+	}
+	w, args := f.where("spec")
+	args = append(args, specFacetKeys)
+	rows, err := s.Pool.Query(ctx, "SELECT e.key, e.value, count(*)::int FROM (SELECT f.attributes"+from+w+") x, jsonb_each_text(x.attributes) e"+
+		fmt.Sprintf(" WHERE e.key = ANY($%d) AND e.value <> '' GROUP BY 1, 2 HAVING count(*) >= 2 ORDER BY 1, 3 DESC, 2", len(args)), args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	by := map[string][]FacetValue{}
+	for rows.Next() {
+		var k, v string
+		var n int
+		if err := rows.Scan(&k, &v, &n); err != nil {
+			return nil, err
+		}
+		if len(by[k]) < 8 {
+			by[k] = append(by[k], FacetValue{Label: v, Value: v, Count: n, On: contains(f.Specs[k], v)})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	floor := max(3, total*3/100)
+	var out []Facet
+	for _, k := range specFacetKeys {
+		vals := by[k]
+		sum := 0
+		for _, v := range vals {
+			sum += v.Count
+		}
+		if len(f.Specs[k]) == 0 && (len(vals) < 2 || sum < floor) {
+			continue
+		}
+		if len(vals) == 0 {
+			continue
+		}
+		out = append(out, Facet{Name: k, Values: vals})
+		if len(out) >= 8 {
+			break
+		}
+	}
+	return out, nil
 }

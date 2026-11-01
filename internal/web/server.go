@@ -304,6 +304,7 @@ func (s *Server) shop(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	f := store.BrowseFilter{
 		Room: chi.URLParam(r, "room"), Category: q.Get("category"), Query: q.Get("q"), Sort: q.Get("sort"),
+		Exact: q.Get("exact") != "",
 		Page: min(max(atoi(q.Get("page"), 1), 1), 500), PerPage: 24,
 	}
 	for _, b := range q["brand"] {
@@ -314,6 +315,14 @@ func (s *Server) shop(w http.ResponseWriter, r *http.Request) {
 	for _, x := range q["finish"] {
 		if x != "" {
 			f.Finishes = append(f.Finishes, x)
+		}
+	}
+	for _, sp := range q["spec"] {
+		if k, v, ok := strings.Cut(sp, ":"); ok && k != "" && v != "" {
+			if f.Specs == nil {
+				f.Specs = map[string][]string{}
+			}
+			f.Specs[k] = append(f.Specs[k], v)
 		}
 	}
 	if v := atoi(q.Get("min"), 0); v > 0 {
@@ -398,7 +407,8 @@ func (s *Server) product(w http.ResponseWriter, r *http.Request) {
 	imgs, _ := s.st.ImagesForFamily(ctx, id)
 	pages, _ := s.st.PagesForFamily(ctx, id, 8)
 	drawings, _ := s.st.DrawingsForFamily(ctx, id)
-	views.Product(*fam, skus, docs, imgs, pages, drawings).Render(ctx, w)
+	sibs, _ := s.st.Siblings(ctx, *fam, 8)
+	views.Product(*fam, skus, docs, imgs, pages, drawings, sibs).Render(ctx, w)
 }
 
 // search is the htmx endpoint behind the header search box.

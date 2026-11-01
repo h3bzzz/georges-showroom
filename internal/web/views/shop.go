@@ -38,6 +38,19 @@ func (u ShopURL) values(f store.BrowseFilter) url.Values {
 	if f.Query != "" {
 		v.Set("q", f.Query)
 	}
+	if f.Exact {
+		v.Set("exact", "1")
+	}
+	keys := make([]string, 0, len(f.Specs))
+	for k := range f.Specs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		for _, x := range f.Specs[k] {
+			v.Add("spec", k+":"+x)
+		}
+	}
 	if f.Sort != "" && f.Sort != "relevance" {
 		v.Set("sort", f.Sort)
 	}
@@ -83,6 +96,22 @@ func (u ShopURL) ToggleFinish(x string) string {
 	f.Finishes = toggle(f.Finishes, x)
 	return u.build(f)
 }
+
+// ToggleSpec adds or removes one attribute value ("Mounting" → "Wall Mount").
+func (u ShopURL) ToggleSpec(k, x string) string {
+	f := u.F
+	f.Page = 0
+	specs := make(map[string][]string, len(f.Specs))
+	for kk, vs := range f.Specs {
+		specs[kk] = append([]string(nil), vs...)
+	}
+	specs[k] = toggle(specs[k], x)
+	if len(specs[k]) == 0 {
+		delete(specs, k)
+	}
+	f.Specs = specs
+	return u.build(f)
+}
 func (u ShopURL) Sort(s string) string {
 	f := u.F
 	f.Page = 0
@@ -102,6 +131,15 @@ func (u ShopURL) ClearQuery() string {
 	return u.build(f)
 }
 func (u ShopURL) ClearAll() string { return u.base() }
+
+// AsTyped searches the original words with no spelling correction.
+func (u ShopURL) AsTyped(q string) string {
+	f := u.F
+	f.Page = 0
+	f.Query = q
+	f.Exact = true
+	return u.build(f)
+}
 
 // HiddenFields returns name/value pairs to keep the state inside the price form.
 func (u ShopURL) HiddenFields() [][2]string {
@@ -151,3 +189,6 @@ func Dollars(c int64) string {
 }
 
 func JoinLabels(xs []string) string { return strings.Join(xs, ", ") }
+
+// QEsc escapes a query-string value.
+func QEsc(s string) string { return url.QueryEscape(s) }

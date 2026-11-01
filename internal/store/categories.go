@@ -31,7 +31,7 @@ var categoryRules = []categoryRule{
 	rule("", "Towel Bars & Rings", `towel|robe hook|bath hook`),
 	rule("", "Paper Holders", `paper holder|tissue|toilet paper|roll holder`),
 	rule("", "Grab Bars", `grab bar|safety bar|assist bar`),
-	rule("", "Bath Accessories", `soap dish|soap dispenser|tumbler|\bshelf\b|shelves|accessor|toothbrush|glass holder|tray`),
+	rule("", "Bath Accessories", `toilet brush|bowl brush|wc brush|soap dish|soap dispenser|tumbler|\bshelf\b|shelves|accessor|toothbrush|glass holder|tray`),
 	rule("", "Bathtub Parts", `faucet deck|tub deck|tub skirt|tub apron|tub drain|tub waste|bath deck|tub (feet|legs)|\bskirt\b|\briser\b|supply (lines?|pipes?)`),
 	rule("", "Water Filtration", `filter|filtration|everhot|instant hot|hot water (tank|dispenser)|water dispenser|chiller|faucet,? tank|tank,? (cord|3')|cord (and|&) tubing`),
 	rule("", "Garbage Disposals", `disposal|disposer`),

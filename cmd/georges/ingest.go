@@ -319,10 +319,52 @@ func ingestCmd() *cobra.Command {
 				return err
 			}
 			fmt.Printf("categories set on %d families\n", n)
+			if v, err := st.RefreshVocab(cmd.Context()); err == nil {
+				fmt.Printf("search vocabulary refreshed (%d words changed)\n", v)
+			}
+			if d, err := st.RefreshDims(cmd.Context()); err == nil {
+				fmt.Printf("sizes indexed: %d\n", d)
+			}
 			return nil
 		},
 	}
 	categories.Flags().BoolVar(&catForce, "force", false, "reassign families that already have a category")
+	dims := &cobra.Command{
+		Use:   "dims",
+		Short: "Rebuild family_dims (sizes parsed from attributes) for measurement search",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			st, err := store.Open(cmd.Context(), cfg.DatabaseURL)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			n, err := st.RefreshDims(cmd.Context())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("sizes indexed: %d\n", n)
+			return nil
+		},
+	}
+	vocab := &cobra.Command{
+		Use:   "vocab",
+		Short: "Rebuild the search vocabulary (search_vocab) that spelling correction draws on",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg := mustConfig()
+			st, err := store.Open(cmd.Context(), cfg.DatabaseURL)
+			if err != nil {
+				return err
+			}
+			defer st.Close()
+			n, err := st.RefreshVocab(cmd.Context())
+			if err != nil {
+				return err
+			}
+			fmt.Printf("search vocabulary: %d words changed\n", n)
+			return nil
+		},
+	}
 	var fnBrand string
 	finishes := &cobra.Command{
 		Use:   "finishes",
@@ -343,7 +385,7 @@ func ingestCmd() *cobra.Command {
 		},
 	}
 	finishes.Flags().StringVar(&fnBrand, "brand", "", "only this brand code")
-	cmd.AddCommand(brands, products, rooms, link, best, retitle, refamily, finishes, prices, categories)
+	cmd.AddCommand(brands, products, rooms, link, best, retitle, refamily, finishes, prices, categories, vocab, dims)
 	return cmd
 }
 

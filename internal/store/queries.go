@@ -881,3 +881,33 @@ func (s *Store) MarkProductImageMiss(ctx context.Context, productID int64) error
 		ON CONFLICT (source, url) DO NOTHING`, productID)
 	return err
 }
+
+// Siblings returns up to n other families that complete the one shown: the same brand and
+// collection first (a lavatory faucet's tub filler, shower trim and accessories: pictured ones
+// first, other product types before the same type), else the same brand and category. A
+// sales rep quoting a bathroom wants the whole suite on one page.
+func (s *Store) Siblings(ctx context.Context, f FamilyRow, n int) ([]FamilyRow, error) {
+	cat := ""
+	if len(f.Category) > 0 {
+		cat = f.Category[0]
+	}
+	where, order := "", ""
+	args := []any{f.BrandID, f.ID, n}
+	switch {
+	case strings.TrimSpace(f.Collection) != "":
+		args = append(args, strings.TrimSpace(f.Collection), cat)
+		where = "f.brand_id=$1 AND f.id<>$2 AND lower(f.collection)=lower($4) AND f.tier<>2"
+		order = "(fb.photo_path IS NULL AND fb.web_path IS NULL), (COALESCE(f.category_path[1],'')=$5), f.tier, hashtext(f.id::text)"
+	case cat != "":
+		args = append(args, cat)
+		where = "f.brand_id=$1 AND f.id<>$2 AND f.category_path[1]=$4 AND f.tier<>2"
+		order = "(fb.photo_path IS NULL AND fb.web_path IS NULL), f.tier, hashtext(f.id::text)"
+	default:
+		return nil, nil
+	}
+	rows, err := s.Pool.Query(ctx, familySelect+" WHERE "+where+" ORDER BY "+order+" LIMIT $3", args...)
+	if err != nil {
+		return nil, err
+	}
+	return pgx.CollectRows(rows, pgx.RowToStructByPos[FamilyRow])
+}

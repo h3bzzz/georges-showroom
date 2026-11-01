@@ -24,6 +24,9 @@ type Concept struct {
 	Exact  []string // the subset whose canonical tokens equal the query's
 	Tones  []string // tones asked for (bronze; or chrome, nickel, stainless… for "silver")
 	Groups []string // what a photograph of those tones looks like (vtone classes)
+	// measurement concepts ("66 inch", "8\" centers"; see dims.go)
+	Inches  float64
+	DimKeys []string // attribute keys the size applies to; empty = any size key
 }
 
 type Intent struct {
@@ -179,7 +182,8 @@ func ParseIntent(q string, brands map[string]string) Intent { return ParseIntent
 func ParseIntentDict(q string, brands map[string]string, dict *FinishDict) Intent {
 	var in Intent
 	lq := strings.ToLower(strings.TrimSpace(q))
-	lq = strings.NewReplacer("“", "", "”", "", "\"", "", ",", " ", "/", " ").Replace(lq)
+	lq = reInchMark.ReplaceAllString(lq, "${1}in ")
+	lq = strings.NewReplacer("“", "", "”", "", "\"", "", ",", " ").Replace(lq)
 	if lq == "" {
 		return in
 	}
@@ -205,6 +209,12 @@ func ParseIntentDict(q string, brands map[string]string, dict *FinishDict) Inten
 	for i := 0; i < len(words); i++ {
 		w := strings.Trim(words[i], "-–—.:;()")
 		if w == "" {
+			continue
+		}
+		// a measurement with its unit or a hint word ("66 inch", "8in centers", "30 wide")
+		if j, c := dimRun(words, i); j > i {
+			in.Concepts = append(in.Concepts, c)
+			i = j - 1
 			continue
 		}
 		// a run of finish language anchored by a tone or treatment word is one finish concept
@@ -356,6 +366,8 @@ func (in Intent) Explain() string {
 			parts = append(parts, c.Label)
 		case "sku":
 			parts = append(parts, "SKU "+c.Label)
+		case "dim":
+			parts = append(parts, c.Label)
 		default:
 			parts = append(parts, "“"+c.Label+"”")
 		}
@@ -434,6 +446,11 @@ func (in Intent) condsStrict(args *[]any, anyWord, anyFinish, strictType bool) [
 	var groups []string
 	for _, c := range in.Concepts {
 		pats := c.Patterns
+		if c.Kind == "dim" {
+			*args = append(*args, c.dimKeys(), c.Inches-c.dimTol(), c.Inches+c.dimTol())
+			groups = append(groups, fmt.Sprintf("f.id IN (SELECT d.family_id FROM family_dims d WHERE d.key = ANY($%d) AND d.inches BETWEEN $%d AND $%d)", len(*args)-2, len(*args)-1, len(*args)))
+			continue
+		}
 		if c.Kind == "finish" && len(c.Names) > 0 {
 			// resolved names: a SKU in one of them. (Matching the names in the family text as well
 			// looked harmless but cost 900 ms: a 24-way regex defeats the trigram index. The
@@ -511,6 +528,11 @@ func (in Intent) relevanceOpt(args *[]any, withTier bool) string {
 		w := 2
 		if c.Kind == "type" {
 			w = 4
+		}
+		if c.Kind == "dim" {
+			*args = append(*args, c.dimKeys(), c.Inches-c.dimTol(), c.Inches+c.dimTol())
+			terms = append(terms, fmt.Sprintf("(CASE WHEN EXISTS (SELECT 1 FROM family_dims d WHERE d.family_id=f.id AND d.key = ANY($%d) AND d.inches BETWEEN $%d AND $%d) THEN 4 ELSE 0 END)", len(*args)-2, len(*args)-1, len(*args)))
+			continue
 		}
 		if c.Kind == "finish" && len(c.Names) > 0 {
 			// stocked in the finish asked for (or a sister finish of the same tone and
