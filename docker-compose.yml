@@ -1,7 +1,7 @@
 # Production stack for a Hostinger VPS (Docker template). Deployed by .github/workflows/deploy.yml
 # through hostinger/deploy-on-vps, which writes the KEY=value pairs it is given as this file's .env.
 #
-#   DOMAIN             public hostname; Caddy fetches a Let's Encrypt cert for it (unset = plain :80)
+#   DOMAIN             public hostname; Caddy fetches a Let's Encrypt cert for it (HTTP on the IP always works)
 #   POSTGRES_PASSWORD  database password (default only for a first boot)
 #   IMAGE_TAG          image tag to run (the workflow passes the commit SHA)
 #   DATA_PATH          host folder holding the rsync'd DATA_DIR (crops, webimg, covers, logos, …)
@@ -40,7 +40,11 @@ services:
     restart: unless-stopped
     depends_on:
       - app
-    command: caddy reverse-proxy --from ${DOMAIN:-:80} --to app:8080
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    configs:
+      - source: caddyfile
+        target: /etc/caddy/Caddyfile
     ports:
       - "80:80"
       - "443:443"
@@ -48,6 +52,18 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+
+# Plain HTTP on the bare IP always works (demos, DNS not yet pointed); the named host gets a
+# Let's Encrypt certificate once its A record reaches this box.
+configs:
+  caddyfile:
+    content: |
+      :80 {
+          reverse_proxy app:8080
+      }
+      {$DOMAIN} {
+          reverse_proxy app:8080
+      }
 
 volumes:
   pgdata:
