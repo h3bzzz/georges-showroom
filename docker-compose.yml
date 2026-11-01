@@ -61,7 +61,7 @@ configs:
       :80 {
           reverse_proxy app:8080
       }
-      {$DOMAIN} {
+      {$$DOMAIN} {
           reverse_proxy app:8080
       }
 
