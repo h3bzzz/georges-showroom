@@ -46,6 +46,9 @@ services:
       - app
     environment:
       DOMAIN: ${DOMAIN:-localhost}
+      # bcrypt hash (caddy hash-password) of the gate password: the site is closed to the
+      # public until the imagery is signed off; every visitor logs in as "georges"
+      GATE_HASH: ${GATE_HASH}
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -62,10 +65,17 @@ services:
 configs:
   caddyfile:
     content: |
+      (gate) {
+          basic_auth {
+              georges {$$GATE_HASH}
+          }
+      }
       :80 {
+          import gate
           reverse_proxy app:8080
       }
       {$$DOMAIN} {
+          import gate
           reverse_proxy app:8080
       }
       www.{$$DOMAIN} {

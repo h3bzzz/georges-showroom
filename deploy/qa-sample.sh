@@ -12,6 +12,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 SITE=${SITE:-https://georgesshowroom.tech}
+# the site is gated (Caddy basic auth) while imagery is being worked on
+[ -f ~/.config/georges-vps.env ] && . ~/.config/georges-vps.env
+AUTH=(); [ -n "${SITE_GATE_PASS:-}" ] && AUTH=(-u "${SITE_GATE_USER:-georges}:$SITE_GATE_PASS")
 OUT=${OUT:-/tmp/georges-qa}
 N=${1:-4}
 mkdir -p "$OUT" && rm -f "$OUT"/sheet-*.jpg "$OUT"/index.tsv "$OUT"/pages.txt
@@ -30,7 +33,7 @@ for i in $(shuf -i 0-$((${#pool[@]}-1)) -n "$N"); do
 done
 : > "$OUT/paths.txt"
 while read -r url; do
-  curl -s "$SITE$url" | { grep -oE '/img/640/[^" ]+' || true; } | sed 's#^/img/640/##' | sort -u | sed "s#^#$url\t#" >> "$OUT/paths.txt"
+  curl -s "${AUTH[@]}" "$SITE$url" | { grep -oE '/img/640/[^" ]+' || true; } | sed 's#^/img/640/##' | sort -u | sed "s#^#$url\t#" >> "$OUT/paths.txt"
 done < "$OUT/pages.txt"
 n=0; args=(); sheet=1
 while IFS=$'\t' read -r url path; do

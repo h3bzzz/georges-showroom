@@ -58,4 +58,5 @@ jobs:
             IMAGE_TAG=${{ github.sha }}
             DOMAIN=${{ vars.DOMAIN }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            GATE_HASH=${{ secrets.GATE_HASH }}
             DATA_PATH=/srv/georges/data
