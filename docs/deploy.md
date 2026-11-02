@@ -41,4 +41,14 @@ Every push to `main` runs `.github/workflows/deploy.yml`: it builds the image, p
        ssh root@VPS_IP 'DB=$(docker ps -qf name=db); docker cp /root/georges.dump $DB:/tmp/ && \
          docker exec $DB pg_restore -U georges -d georges --no-owner --clean --if-exists /tmp/georges.dump'
 
-Repeat steps 5 and 6 whenever the pipeline on the workstation produces new crops or rows.
+Repeat steps 5 and 6 whenever the pipeline on the workstation produces new crops or rows, or
+run `deploy/sync-data.sh` which does both (`images` / `db` to do one side).
+
+## Day to day
+
+- Code: push to `main`. The workflow runs vet and tests, builds the image, and Hostinger's Docker
+  manager restarts the stack with it. Watch it at github.com/h3bzzz/georges-showroom/actions.
+- Data: `deploy/sync-data.sh` after a pipeline run (links, vision, upscale, vendor images).
+- Logs on the VPS: `ssh root@VPS_IP docker logs --since 1h georges-showroom-app-1`.
+- Caddy stops retrying a certificate after repeated failures; after a DNS fix,
+  `docker restart georges-showroom-caddy-1`.

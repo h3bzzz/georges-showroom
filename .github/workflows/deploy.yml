@@ -10,7 +10,19 @@ permissions:
   packages: write
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go run github.com/a-h/templ/cmd/templ@v0.3.1020 generate -path internal/web/views
+      - run: go vet ./...
+      - run: go test ./...
+
   build:
+    needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
