@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -297,8 +299,18 @@ func (s *Store) ListFamilies(ctx context.Context, f FamilyFilter) ([]FamilyRow, 
 	if err := s.Pool.QueryRow(ctx, "SELECT count(*) FROM product_families f JOIN brands b ON b.id=f.brand_id LEFT JOIN family_best fb ON fb.family_id=f.id"+w, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
+	// a typed word that names a collection or a model outright ("coal": Hydro Systems' Coal tub)
+	// leads; a whole-word title hit or a SKU prefix next; the rest in the usual order
+	order := "f.tier, (fb.photo_path IS NULL), b.name, f.title"
+	if q := strings.TrimSpace(f.Query); q != "" && len(q) <= 40 {
+		args = append(args, q, `\m`+regexp.QuoteMeta(q)+`\M`, q+"%")
+		n := len(args)
+		order = fmt.Sprintf(`(CASE WHEN lower(COALESCE(f.collection,'')) = lower($%[1]d) OR lower(COALESCE(f.family_key,'')) = lower($%[1]d) THEN 0
+		  WHEN COALESCE(f.collection,'') ~* $%[2]d OR COALESCE(f.title,'') ~* $%[2]d THEN 1
+		  WHEN EXISTS (SELECT 1 FROM products p WHERE p.family_id=f.id AND p.sku ILIKE $%[3]d) THEN 2 ELSE 3 END), `, n-2, n-1, n) + order
+	}
 	args = append(args, f.PerPage, (f.Page-1)*f.PerPage)
-	rows, err := s.Pool.Query(ctx, familySelect+w+" ORDER BY f.tier, (fb.photo_path IS NULL), b.name, f.title LIMIT $"+itoa(len(args)-1)+" OFFSET $"+itoa(len(args)), args...)
+	rows, err := s.Pool.Query(ctx, familySelect+w+" ORDER BY "+order+" LIMIT $"+itoa(len(args)-1)+" OFFSET $"+itoa(len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -371,7 +383,7 @@ func (s *Store) ImagesForFamily(ctx context.Context, familyID int64) ([]string, 
 		  SELECT '/files/'||COALESCE(cc.hd_path,cc.path), 1, (fc.how='exact'),
 		    (cc.vkind IS DISTINCT FROM 'detail' OR COALESCE(cc.vscore,0) < 0.3) AND cc.w::real/GREATEST(cc.h,1) BETWEEN 0.33 AND 2.4,
 		    LEAST(cc.w,cc.h) >= 150, cc.score, cc.w*cc.h
-		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id WHERE fc.family_id=$1 AND cc.kind='photo' AND cc.dup_of IS NULL
+		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id WHERE fc.family_id=$1 AND cc.kind='photo' AND cc.dup_of IS NULL AND NOT cc.rejected
 		  UNION ALL
 		  SELECT '/files/'||i.path, 2, true, true, true, 1, i.width*i.height FROM product_images i
 		  WHERE i.family_id=$1 AND i.source='spec' AND i.path IS NOT NULL AND i.width >= 400 AND i.height >= 300
@@ -916,4 +928,31 @@ func (s *Store) Siblings(ctx context.Context, f FamilyRow, n int) ([]FamilyRow, 
 		return nil, err
 	}
 	return pgx.CollectRows(rows, pgx.RowToStructByPos[FamilyRow])
+}
+
+// RejectCrops marks crops (by stored path, or their HD twin's path, or a /files/ or /img/{w}/
+// URL of either) as refused for every card, and returns how many rows changed. The caller
+// re-picks family photos afterwards.
+func (s *Store) RejectCrops(ctx context.Context, paths []string) (int64, error) {
+	clean := make([]string, 0, len(paths))
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		p = strings.TrimPrefix(p, "/files/")
+		if strings.HasPrefix(p, "/img/") {
+			if i := strings.Index(p[5:], "/"); i >= 0 {
+				p = p[5+i+1:]
+			}
+		}
+		if p != "" {
+			clean = append(clean, p)
+		}
+	}
+	if len(clean) == 0 {
+		return 0, nil
+	}
+	tag, err := s.Pool.Exec(ctx, `UPDATE catalog_crops SET rejected = true WHERE NOT rejected AND (path = ANY($1) OR hd_path = ANY($1))`, clean)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }

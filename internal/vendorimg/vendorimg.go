@@ -52,6 +52,8 @@ var Vendors = []Vendor{
 	// white). Our SKUs are the bare model (3180-5623); the master is fetched in the first finish
 	// the model is offered in, polished chrome (26) first.
 	{Code: "NEW", Host: "www.newportbrass.com", Ext: ".jpg", Resolve: newportResolve},
+	// California Faucets: see calfaucets.go
+	{Code: "CAL", Host: "images.calfaucets.com", Ext: ".jpg", Resolve: calResolve},
 	// Lacava (verified 2026-11-01): /PDGImages/<SKU>.jpg for the models that have one (about one
 	// in five of our SKUs; the rest answer 404).
 	{Code: "LAV", Host: "www.lacava.com", Ext: ".jpg", URL: func(sku string) string {
@@ -163,6 +165,7 @@ var ErrNoScheme = errors.New("vendorimg: sku shape has no master url")
 type Client struct {
 	http    *http.Client
 	limiter *rate.Limiter
+	dir     string // masters root (dir/<code>/…); resolvers keep their lookup caches under it
 }
 
 func New(rps float64) *Client {
@@ -191,6 +194,7 @@ type Result struct {
 // network when the file already exists.
 func (c *Client) Fetch(ctx context.Context, v *Vendor, sku, dir string) (*Result, error) {
 	sku = strings.ToUpper(strings.TrimSpace(sku))
+	c.dir = dir
 	path := filepath.Join(dir, v.Code, sku+v.Ext)
 	if st, err := os.Stat(path); err == nil && st.Size() > 0 {
 		return &Result{URL: "file://" + path, Path: path, Bytes: st.Size()}, nil

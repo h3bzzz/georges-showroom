@@ -178,7 +178,8 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		  JOIN product_families pf ON pf.id=fc.family_id
 		  JOIN uses u ON u.crop_id=fc.crop_id
 		  JOIN pages pg ON pg.catalog_id=cc.catalog_id AND pg.page=cc.page
-		  WHERE (fc.how <> 'page' OR pg.photos = 1 OR pg.models <= 2)
+		  WHERE NOT cc.rejected
+		    AND (fc.how <> 'page' OR pg.photos = 1 OR pg.models <= 2)
 		    -- the vision model's subject must suit the family's category: a handle or a drain
 		    -- never stands for a faucet, a tub never for a sink (migration 00029); the probe is ~89%
 		    -- precise at 0.7 on the labelled set
@@ -257,7 +258,8 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		), openers AS (
 		  SELECT cc.catalog_id, cc.page, cc.id, COALESCE(cc.hd_path,cc.path) AS path, COALESCE(cc.hd_w,cc.w) AS w, cc.w*cc.h AS area, cc.vsubject, cc.vsubscore
 		  FROM catalog_crops cc
-		  WHERE (cc.kind='photo' OR (cc.vkind='photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2)) AND cc.w >= 300 AND cc.h >= 200
+		  WHERE NOT cc.rejected
+		    AND (cc.kind='photo' OR (cc.vkind='photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2)) AND cc.w >= 300 AND cc.h >= 200
 		    AND (cc.vkind IS NULL OR cc.vkind = 'photo')
 		    -- a borrowed picture is held to a higher standard than the family's own: no
 		    -- skinny strips (a 456×2200 sliver of a kitchen), no room scenes

@@ -133,7 +133,7 @@ func catalogsCmd() *cobra.Command {
 		cmd.AddCommand(sub)
 	}
 	cmd.AddCommand(catalogsExtractCmds()...)
-	cmd.AddCommand(catalogsPipelineCmd(), catalogsItemsCmd(), catalogsTocCmd(), tocDebugCmd(), catalogsAuditCmd(), catalogsTidyCmd(), catalogsSheetCmd(), catalogsVisionCmd(), catalogsDedupeCmd(), catalogsInfoCmd())
+	cmd.AddCommand(catalogsPipelineCmd(), catalogsItemsCmd(), catalogsTocCmd(), tocDebugCmd(), catalogsAuditCmd(), catalogsTidyCmd(), catalogsRejectCmd(), catalogsSheetCmd(), catalogsVisionCmd(), catalogsDedupeCmd(), catalogsInfoCmd())
 	return cmd
 }
 

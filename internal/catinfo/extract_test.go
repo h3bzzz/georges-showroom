@@ -140,6 +140,7 @@ func TestCollection(t *testing.T) {
 		{`APRES CABINET 2026`, "Classic Brass", "Apres"},
 		{`PRECIS SILGRANIT`, "Blanco", "Precis"},
 		{`ELIZABETH`, "Hydro Systems", "Elizabeth"},
+		{`COAL`, "Hydro Systems", "Coal"},
 		{`Vintera 33 Silgranit`, "Blanco", "Vintera"},
 		{`Item Number List Price`, "Chicago Faucets", ""},
 		{`Price Description`, "Brizo", ""},

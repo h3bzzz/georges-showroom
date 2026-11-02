@@ -913,6 +913,8 @@ func appendUniq(xs []string, v string) []string {
 
 // ---------- collection ----------
 
+var reHeadDims = regexp.MustCompile(`\s+\d+(?:[./-]\d+)?\s*(?:["”″']|in\b|mm\b|cm\b)|\s+\d+\s*[xX×]\s*\d+`)
+
 func (e *ex) collection() (string, float64) {
 	for _, t := range e.in.TOC {
 		if c := Collection(t, e.in.BrandName); c != "" {
@@ -921,6 +923,13 @@ func (e *ex) collection() (string, float64) {
 	}
 	if c := Collection(e.in.Heading, e.in.BrandName); c != "" {
 		return c, 0.7
+	}
+	// a tub page heads with the model and its sizes on one line ("COAL 60"L x 32"W x 23"D",
+	// Hydro Systems): the name is what comes before the first dimension
+	if cut := reHeadDims.FindStringIndex(e.in.Heading); cut != nil && cut[0] > 0 {
+		if c := Collection(e.in.Heading[:cut[0]], e.in.BrandName); c != "" {
+			return c, 0.65
+		}
 	}
 	// Duravit/Blanco style: the block's title line names the line ("DuraSquare Vessel Sink")
 	if e.in.Brand == "DRV" {
