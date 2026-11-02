@@ -640,12 +640,17 @@ type tocEntry struct {
 // level-1 entries at or before it. OCR'd contents entries are page headings, which
 // pageHeading already supplies with better junk control, so they are not used here.
 func (t tocIndex) entries(cat, page int) []string {
-	var l2, l1 string
+	// own: a heading the OCR pass read on this very page (Hydro Systems prints one tub per
+	// page, "COAL", under a printed section "STON COLLECTION"); the page's own name is the
+	// most specific entry and comes first
+	var own, l2, l1 string
 	for _, e := range t.byCat[cat] {
 		if e.page > page {
 			break
 		}
 		switch {
+		case !e.printed && e.page == page && e.level >= 2:
+			own = e.title
 		case e.printed && e.level >= 2:
 			l2 = e.title
 		case e.printed:
@@ -653,7 +658,7 @@ func (t tocIndex) entries(cat, page int) []string {
 		}
 	}
 	var out []string
-	for _, s := range []string{l2, l1} {
+	for _, s := range []string{own, l2, l1} {
 		if s != "" {
 			out = append(out, s)
 		}
