@@ -29,10 +29,13 @@ images() {
 
 db() {
   echo "== database → $VPS (pg_dump through a reverse tunnel, restore into the db container)"
-  # the VPS reaches the workstation's Postgres on its own loopback:5432 for the length of this ssh
-  ssh -o ExitOnForwardFailure=yes -R 127.0.0.1:5432:127.0.0.1:5432 "$VPS" "
+  # the VPS reaches the workstation's Postgres on its own loopback:5439 for the length of this
+  # ssh (5432 there is the live database, published on loopback for deploy/tunnel.sh)
+  local url=${DB_URL/localhost/127.0.0.1}
+  url=${url/127.0.0.1:5432/127.0.0.1:5439}
+  ssh -o ExitOnForwardFailure=yes -R 127.0.0.1:5439:127.0.0.1:5432 "$VPS" "
     set -e
-    docker run --rm --network host -v /srv/georges:/dump postgres:16 pg_dump -Fc '${DB_URL/localhost/127.0.0.1}' -f /dump/georges.dump
+    docker run --rm --network host -v /srv/georges:/dump postgres:16 pg_dump -Fc '$url' -f /dump/georges.dump
     DB=\$(docker ps -qf name=georges-showroom-db)
     docker cp /srv/georges/georges.dump \$DB:/tmp/georges.dump
     docker exec \$DB pg_restore -U georges -d georges --no-owner --clean --if-exists /tmp/georges.dump 2>&1 | grep -vE 'does not exist, skipping' || true
