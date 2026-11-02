@@ -163,7 +163,7 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		      -- nothing better is linked)
 		      (cc.vkind IS DISTINCT FROM 'detail' OR COALESCE(cc.vscore,0) < 0.3) DESC,
 		      (cc.vsubject IS NULL OR COALESCE(cc.vsubscore,0) < 0.45 OR subject_fits(cc.vsubject, pf.category_path)) DESC,
-		      (cc.w::real/GREATEST(cc.h,1) BETWEEN 0.45 AND 2.4) DESC,
+		      (cc.w::real/GREATEST(cc.h,1) BETWEEN 0.33 AND 2.4) DESC,
 		      (LEAST(cc.w,cc.h) >= 120) DESC,
 		      (cc.w*cc.h >= 40000) DESC,
 		      (fc.how IN ('exact','family','norm','suffix')) DESC,
@@ -261,7 +261,7 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    AND (cc.vkind IS NULL OR cc.vkind = 'photo')
 		    -- a borrowed picture is held to a higher standard than the family's own: no
 		    -- skinny strips (a 456×2200 sliver of a kitchen), no room scenes
-		    AND cc.w::real/cc.h BETWEEN 0.45 AND 2.4
+		    AND cc.w::real/cc.h BETWEEN 0.33 AND 2.4
 		    AND COALESCE(cc.vscene,0) < 0.5
 		    AND (SELECT count(*) FROM catalog_crops o WHERE o.catalog_id=cc.catalog_id AND o.page=cc.page AND o.kind='photo') <= 2
 		), pick AS (
@@ -281,6 +281,28 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// twin photo: a family with no picture borrows the card of a same-brand family with the same
+	// title (migration 00049). Price books print one product across several series: one line
+	// gets the photograph, the others only a SKU. The twin's picture must be its own (crop,
+	// spec or vendor master), never itself borrowed, and never a part's.
+	_, err = s.Pool.Exec(ctx, `
+		WITH need AS (
+		  SELECT fb.family_id, pf.brand_id, pf.title
+		  FROM family_best fb JOIN product_families pf ON pf.id=fb.family_id
+		  WHERE fb.photo_path IS NULL AND fb.web_path IS NULL AND pf.title IS NOT NULL AND pf.title <> '' AND pf.tier <> 2
+		), pick AS (
+		  SELECT DISTINCT ON (n.family_id) n.family_id,
+		    COALESCE(t.web_path, t.photo_path) AS path, CASE WHEN t.web_path IS NOT NULL THEN 2000 ELSE t.photo_w END AS w
+		  FROM need n
+		  JOIN product_families f2 ON f2.brand_id=n.brand_id AND f2.title=n.title AND f2.id<>n.family_id
+		  JOIN family_best t ON t.family_id=f2.id AND (t.web_path IS NOT NULL OR (t.photo_path IS NOT NULL AND t.photo_how IN ('crop','spec')))
+		  ORDER BY n.family_id, (t.web_path IS NOT NULL) DESC, t.photo_grade NULLS LAST, t.photo_w DESC NULLS LAST
+		)
+		UPDATE family_best fb SET photo_path=pick.path, photo_w=pick.w, photo_how='twin', updated_at=now()
+		FROM pick WHERE pick.family_id=fb.family_id`)
+	if err != nil {
+		return err
+	}
 	// photo_grade (migration 00047): how far the picture can be trusted, read by Browse so the
 	// first pages of a query show whole products and the doubtful cards wait
 	_, err = s.Pool.Exec(ctx, `
@@ -292,7 +314,7 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    WHEN cc.id IS NULL THEN 1
 		    WHEN (cc.vkind = 'detail' AND COALESCE(cc.vscore,0) >= 0.3)
 		      OR (cc.vkind IN ('callout','drawing','spec','text','other','lifestyle') AND COALESCE(cc.vscore,0) >= 0.4)
-		      OR cc.w::real/GREATEST(cc.h,1) NOT BETWEEN 0.45 AND 2.4
+		      OR cc.w::real/GREATEST(cc.h,1) NOT BETWEEN 0.33 AND 2.4
 		      OR LEAST(cc.w,cc.h) < 100
 		      OR (cc.vsubject IS NOT NULL AND COALESCE(cc.vsubscore,0) >= 0.45 AND NOT subject_fits(cc.vsubject, pf.category_path))
 		      OR COALESCE(cc.vscene,0) >= 0.5 THEN 2

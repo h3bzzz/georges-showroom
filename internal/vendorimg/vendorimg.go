@@ -47,6 +47,52 @@ var Vendors = []Vendor{
 		return "https://media.brizo.com/elvis/OnWhite/lg/" + sku + "-B1.png"
 	}},
 	{Code: "ROB", Host: "www.robern.com", Ext: ".png", Resolve: robernResolve},
+	// Newport Brass (verified 2026-11-01): one JPEG per model and finish code,
+	// /images/dynamicimages/products/newport/<model>/<model>_<finish>_large.jpg (~1200 px on
+	// white). Our SKUs are the bare model (3180-5623); the master is fetched in the first finish
+	// the model is offered in, polished chrome (26) first.
+	{Code: "NEW", Host: "www.newportbrass.com", Ext: ".jpg", Resolve: newportResolve},
+	// Lacava (verified 2026-11-01): /PDGImages/<SKU>.jpg for the models that have one (about one
+	// in five of our SKUs; the rest answer 404).
+	{Code: "LAV", Host: "www.lacava.com", Ext: ".jpg", URL: func(sku string) string {
+		if !lacavaSKU.MatchString(sku) {
+			return ""
+		}
+		return "https://www.lacava.com/PDGImages/" + sku + ".jpg"
+	}},
+}
+
+var lacavaSKU = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{2,24}$`)
+var newportSKU = regexp.MustCompile(`^[0-9][0-9A-Z-]{2,14}$`)
+
+// newportFinishes are Newport Brass finish codes in the order a master is tried: polished
+// chrome, satin nickel, oil rubbed bronze, forever brass, satin brass, flat black, polished nickel.
+var newportFinishes = []string{"26", "15", "10", "01", "04", "56", "15S", "24", "03N", "08"}
+
+func newportResolve(ctx context.Context, c *Client, sku string) (string, error) {
+	if !newportSKU.MatchString(sku) {
+		return "", ErrNoScheme
+	}
+	for _, f := range newportFinishes {
+		u := "https://www.newportbrass.com/images/dynamicimages/products/newport/" + sku + "/" + sku + "_" + f + "_large.jpg"
+		if err := c.limiter.Wait(ctx); err != nil {
+			return "", err
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodHead, u, nil)
+		if err != nil {
+			return "", err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (georges-showroom dealer sync)")
+		res, err := c.http.Do(req)
+		if err != nil {
+			return "", err
+		}
+		res.Body.Close()
+		if res.StatusCode == http.StatusOK && strings.HasPrefix(res.Header.Get("Content-Type"), "image/") {
+			return u, nil
+		}
+	}
+	return "", nil
 }
 
 // Robern (a Kohler company) serves product photography from Kohler's Scene7 account; the asset

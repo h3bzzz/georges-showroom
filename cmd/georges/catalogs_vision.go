@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/jpeg"
@@ -25,7 +26,7 @@ import (
 // crop_kind() (what may be a card photo at all) and subject_fits() (which crop may stand for
 // a family of a given category), then family photos are re-picked.
 func catalogsVisionCmd() *cobra.Command {
-	var brand, model, labels, rank string
+	var brand, model, labels, rank, like string
 	var limit, threads, top int
 	var all, dry, eval, reclassify, spec, tone, scene, fit bool
 	var mix float32
@@ -126,6 +127,10 @@ func catalogsVisionCmd() *cobra.Command {
 			}
 			start := time.Now()
 			counts := map[string]int{}
+			if like != "" {
+				// label mining by example: the stored embeddings nearest to one crop
+				return likeCrops(ctx, like, top, brand, enc.Model, streamEmb)
+			}
 			if reclassify && rank != "" {
 				// label mining for a new class: the stored embeddings scored by the medium head,
 				// the --top most probable members of --rank printed for a human to look at
@@ -294,13 +299,62 @@ func catalogsVisionCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&eval, "eval", false, "leave-one-out accuracy on --labels; write nothing")
 	cmd.Flags().BoolVar(&reclassify, "reclassify", false, "re-score stored embeddings with the current prompts; no image work")
 	cmd.Flags().StringVar(&rank, "rank", "", "with --reclassify: print the crops the medium head finds most likely to be this class (label mining)")
-	cmd.Flags().IntVar(&top, "top", 60, "how many crops --rank prints")
+	cmd.Flags().StringVar(&like, "like", "", "print the --top crops whose stored embedding is nearest this crop path (label mining by example; no image work)")
+	cmd.Flags().IntVar(&top, "top", 60, "how many crops --rank / --like print")
 	cmd.Flags().BoolVar(&spec, "spec", false, "classify spec-sheet images (product_images source='spec') instead of catalog crops")
 	cmd.Flags().BoolVar(&tone, "tone", false, "score the metal tone (silver | gold | bronze | black | white | copper) of every photo crop from its stored embedding; no image work (--mix 0 = prompts only)")
 	cmd.Flags().BoolVar(&scene, "scene", false, "score every photo crop as product vs room scene from its stored embedding (catalog_crops.vscene); no image work")
 	cmd.Flags().BoolVar(&fit, "fit", false, "score how well each candidate card picture fits its family's name (crop_fit); no image work")
 	cmd.Flags().StringSliceVar(&show, "show", nil, "classify these image files and print the top classes")
 	return cmd
+}
+
+// likeCrops prints the crops nearest (cosine) to one crop's stored embedding: "cos<TAB>path",
+// nearest first, for collecting hand labels of a look the prompts cannot name (a Chicago
+// Faucets system photo with a, b, c callouts).
+func likeCrops(ctx context.Context, seed string, top int, brand, model string,
+	stream func(context.Context, string, string, func(store.CropEmbedding) error) error) error {
+	var seedEmb []float32
+	found := errors.New("found")
+	err := stream(ctx, "", model, func(e store.CropEmbedding) error {
+		if e.Path == seed || strings.HasSuffix(seed, e.Path) {
+			seedEmb = e.Emb
+			return found
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, found) {
+		return err
+	}
+	if seedEmb == nil {
+		return fmt.Errorf("--like %q: no stored embedding for that crop (classify it first)", seed)
+	}
+	type hit struct {
+		cos  float32
+		path string
+	}
+	var hits []hit
+	n := 0
+	err = stream(ctx, brand, model, func(e store.CropEmbedding) error {
+		n++
+		c := vision.Dot(seedEmb, e.Emb)
+		if len(hits) < top || c > hits[len(hits)-1].cos {
+			hits = append(hits, hit{c, e.Path})
+			sort.Slice(hits, func(a, b int) bool { return hits[a].cos > hits[b].cos })
+			if len(hits) > top {
+				hits = hits[:top]
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "%d embeddings compared\n", n)
+	for _, h := range hits {
+		fmt.Printf("%.3f\t%s\n", h.cos, h.path)
+	}
+	return nil
 }
 
 // rankCrops streams stored embeddings and prints the top crops by one medium class's

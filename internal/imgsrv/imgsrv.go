@@ -12,6 +12,8 @@ import (
 	"image/gif"
 	"image/jpeg"
 	"image/png"
+
+	webpenc "github.com/gen2brain/webp"
 	"io"
 	"log"
 	"net/http"
@@ -32,11 +34,12 @@ var Roots = []string{"crops", "crops_hd", "covers", "logos", "webimg", "catalogs
 
 // Widths are the only renditions /img/{w}/… will produce (anything else is a 404), so a
 // crawler cannot fill the disk with arbitrary sizes.
-var Widths = []int{160, 320, 480, 640, 960, 1280}
+var Widths = []int{160, 320, 480, 640, 960, 1280, 1920}
 
 const (
 	cacheMaxAge = 7 * 24 * time.Hour
 	jpegQuality = 85
+	webpQuality = 82
 )
 
 var exts = map[string]bool{".jpg": true, ".jpeg": true, ".png": true, ".gif": true, ".webp": true, ".svg": true}
@@ -101,7 +104,10 @@ func (s *Server) Resized(w http.ResponseWriter, r *http.Request) {
 		s.serveFile(w, r, src)
 		return
 	}
-	out, err := s.rendition(src, rel, width)
+	// the same rendition is a third smaller as WebP; browsers that take it say so
+	webp := strings.Contains(r.Header.Get("Accept"), "image/webp")
+	w.Header().Add("Vary", "Accept")
+	out, err := s.rendition(src, rel, width, webp)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			http.NotFound(w, r)
@@ -137,17 +143,21 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request, p string) {
 // rendition returns the path of the cached w-wide copy of src, building it when missing or
 // older than the source (crops are rewritten in place by `catalogs extract`). Concurrent
 // first requests for the same rendition share one resize.
-func (s *Server) rendition(src, rel string, width int) (string, error) {
+func (s *Server) rendition(src, rel string, width int, webp bool) (string, error) {
 	sst, err := os.Stat(src)
 	if err != nil {
 		return "", err
 	}
-	out := filepath.Join(s.cacheDir, strconv.Itoa(width), filepath.FromSlash(strings.TrimSuffix(rel, path.Ext(rel))+".jpg"))
+	ext := ".jpg"
+	if webp {
+		ext = ".webp"
+	}
+	out := filepath.Join(s.cacheDir, strconv.Itoa(width), filepath.FromSlash(strings.TrimSuffix(rel, path.Ext(rel))+ext))
 	if ost, err := os.Stat(out); err == nil && !ost.ModTime().Before(sst.ModTime()) {
 		return out, nil
 	}
 	v, err, _ := s.group.Do(out, func() (any, error) {
-		p, err := resize(src, out, width)
+		p, err := resize(src, out, width, webp)
 		return p, err
 	})
 	if err != nil {
@@ -156,9 +166,10 @@ func (s *Server) rendition(src, rel string, width int) (string, error) {
 	return v.(string), nil
 }
 
-// resize writes src scaled to width into out (JPEG). When the source is not wider than width
-// it returns src itself: never upscale, never re-encode what is already right.
-func resize(src, out string, width int) (string, error) {
+// resize writes src scaled to width into out (JPEG, or WebP when webp). When the source is
+// not wider than width and no format change is wanted it returns src itself: never upscale,
+// never re-encode what is already right.
+func resize(src, out string, width int, webp bool) (string, error) {
 	f, err := os.Open(src)
 	if err != nil {
 		return "", err
@@ -169,14 +180,17 @@ func resize(src, out string, width int) (string, error) {
 		return "", fmt.Errorf("decode %s: %w", src, err)
 	}
 	b := img.Bounds()
-	if b.Dx() <= width {
+	if b.Dx() <= width && !webp {
 		return src, nil
 	}
-	h := int(float64(b.Dy()) * float64(width) / float64(b.Dx()))
+	w, h := width, int(float64(b.Dy())*float64(width)/float64(b.Dx()))
+	if b.Dx() <= width {
+		w, h = b.Dx(), b.Dy() // same pixels, smaller file
+	}
 	if h < 1 {
 		h = 1
 	}
-	dst := image.NewRGBA(image.Rect(0, 0, width, h))
+	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	// png/gif sources (logos) may carry alpha: flatten onto white, which is the card background
 	if format != "jpeg" {
 		draw.Draw(dst, dst.Bounds(), image.White, image.Point{}, draw.Src)
@@ -190,7 +204,12 @@ func resize(src, out string, width int) (string, error) {
 		return "", err
 	}
 	defer os.Remove(tmp.Name())
-	if err := jpeg.Encode(tmp, dst, &jpeg.Options{Quality: jpegQuality}); err != nil {
+	if webp {
+		err = webpenc.Encode(tmp, dst, webpenc.Options{Quality: webpQuality})
+	} else {
+		err = jpeg.Encode(tmp, dst, &jpeg.Options{Quality: jpegQuality})
+	}
+	if err != nil {
 		tmp.Close()
 		return "", err
 	}

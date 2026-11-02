@@ -362,14 +362,20 @@ func (s *Store) DocumentsForFamily(ctx context.Context, familyID int64) ([]DocRo
 func (s *Store) ImagesForFamily(ctx context.Context, familyID int64) ([]string, error) {
 	rows, err := s.Pool.Query(ctx, `
 		SELECT u FROM (
-		  SELECT '/files/'||COALESCE(cc.hd_path,cc.path) AS u, 0 AS pri, (fc.how='exact') AS ex, cc.score AS sc, cc.w*cc.h AS ar
+		  -- vendor masters lead (2000 px, white); then the family's own crops, whole-product and
+		  -- big before a handle close-up or a 127 px fragment with a caption in it; spec-sheet
+		  -- photos last
+		  SELECT '/files/'||i.path AS u, 0 AS pri, true AS ex, true AS whole, true AS big, 1::real AS sc, 0 AS ar
+		  FROM product_images i WHERE i.family_id=$1 AND i.source='web' AND i.path IS NOT NULL AND i.path NOT LIKE 'miss:%'
+		  UNION ALL
+		  SELECT '/files/'||COALESCE(cc.hd_path,cc.path), 1, (fc.how='exact'),
+		    (cc.vkind IS DISTINCT FROM 'detail' OR COALESCE(cc.vscore,0) < 0.3) AND cc.w::real/GREATEST(cc.h,1) BETWEEN 0.33 AND 2.4,
+		    LEAST(cc.w,cc.h) >= 150, cc.score, cc.w*cc.h
 		  FROM family_crops fc JOIN catalog_crops cc ON cc.id=fc.crop_id WHERE fc.family_id=$1 AND cc.kind='photo' AND cc.dup_of IS NULL
 		  UNION ALL
-		  SELECT '/files/'||i.path, 1, true, 1, 0 FROM product_images i WHERE i.family_id=$1 AND i.source='web' AND i.path IS NOT NULL
-		  UNION ALL
-		  SELECT '/files/'||i.path, 2, true, 1, i.width*i.height FROM product_images i
+		  SELECT '/files/'||i.path, 2, true, true, true, 1, i.width*i.height FROM product_images i
 		  WHERE i.family_id=$1 AND i.source='spec' AND i.path IS NOT NULL AND i.width >= 400 AND i.height >= 300
-		) x ORDER BY pri, ex DESC, sc DESC, ar DESC LIMIT 12`, familyID)
+		) x ORDER BY pri, whole DESC, ex DESC, big DESC, ar DESC, sc DESC LIMIT 12`, familyID)
 	if err != nil {
 		return nil, err
 	}

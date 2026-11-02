@@ -910,3 +910,13 @@ crops/WAT/BOG_2024PriceBook/0016_04.jpg	text	other
 crops/WAT/BOG_2024PriceBook/0009_02.jpg	text	other
 crops/WAT/BOG_2024PriceBook/0016_02.jpg	other	other
 crops/BRZ/BRZ-ShowerSense-DigitalShower-Brochure/0007_01.jpg	other	other
+# callout set 2026-11-01: product photos overprinted with lettered/numbered markers (Chicago Faucets system shots), mined with `catalogs vision --like crops/CHI/CHI-Healthcare/0014_00.jpg`
+crops/CHI/CHI-Healthcare/0014_00.jpg	callout	shower
+crops/CHI/CHI-Healthcare/0016_00.jpg	callout	shower
+crops/CHI/CHI-Healthcare/0015_04.jpg	callout	part
+crops/CHI/CHI-2025Catalog/0120_00.jpg	callout	shower
+crops/CHI/CHI-Laboratory/0002_00.jpg	lifestyle	other
+crops/JET/Jetta_Designer_2020/0014_02.jpg	photo	tub
+crops/JET/Jetta_Designer_2020/0015_03.jpg	photo	tub
+crops/JET/Jetta_Designer_2020/0015_04.jpg	photo	tub
+crops/BRZ/BRZ-ShowerSense-DigitalShower-Brochure/0004_02.jpg	photo	shower

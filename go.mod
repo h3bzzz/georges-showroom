@@ -7,6 +7,7 @@ require (
 	github.com/a-h/templ v0.3.1020
 	github.com/caarlos0/env/v11 v11.4.1
 	github.com/fergusstrange/embedded-postgres v1.34.0
+	github.com/gen2brain/webp v0.5.4
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/go-rod/rod v0.116.2
 	github.com/go-rod/stealth v0.4.9
@@ -24,6 +25,7 @@ require (
 
 require (
 	github.com/andybalholm/cascadia v1.3.4 // indirect
+	github.com/ebitengine/purego v0.8.2 // indirect
 	github.com/eliben/go-sentencepiece v0.7.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/gofrs/flock v0.13.1 // indirect
@@ -47,6 +49,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/sethvargo/go-retry v0.4.0 // indirect
 	github.com/spf13/pflag v1.0.9 // indirect
+	github.com/tetratelabs/wazero v1.9.0 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/ysmood/fetchup v0.2.3 // indirect
 	github.com/ysmood/goob v0.4.0 // indirect
