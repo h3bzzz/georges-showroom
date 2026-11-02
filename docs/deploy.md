@@ -49,6 +49,11 @@ run `deploy/sync-data.sh` which does both (`images` / `db` to do one side).
 - Code: push to `main`. The workflow runs vet and tests, builds the image, and Hostinger's Docker
   manager restarts the stack with it. Watch it at github.com/h3bzzz/georges-showroom/actions.
 - Data: `deploy/sync-data.sh` after a pipeline run (links, vision, upscale, vendor images).
+- Working against the live database instead: `eval "$(deploy/tunnel.sh)"` opens an ssh tunnel
+  (local 5433 → VPS Postgres, loopback only) and exports DATABASE_URL for it, so pipeline
+  commands (`ingest best`, `vendorimages`, `catalogs vision --reclassify`, …) write straight to
+  the store the site reads. Files they produce still go up with `deploy/sync-data.sh images`.
+  The embedded local Postgres stays the scratch copy for development.
 - Logs on the VPS: `ssh root@VPS_IP docker logs --since 1h georges-showroom-app-1`.
 - Caddy stops retrying a certificate after repeated failures; after a DNS fix,
   `docker restart georges-showroom-caddy-1`.
