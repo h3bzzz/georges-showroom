@@ -13,6 +13,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -106,6 +107,7 @@ func (s *Server) Resized(w http.ResponseWriter, r *http.Request) {
 			http.NotFound(w, r)
 			return
 		}
+		log.Printf("imgsrv: %s: %v", rel, err)
 		http.Error(w, "image error", http.StatusInternalServerError)
 		return
 	}

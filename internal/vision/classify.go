@@ -61,6 +61,17 @@ func buildMedium() []Class {
 			"a black and white line drawing of a %s", "a technical drawing of a %s",
 			"an outline sketch of a %s", "an engineering diagram of a %s", "a CAD line drawing of a %s",
 		}, mediumThings, "an exploded parts diagram", "a dimensioned drawing with measurement arrows", "a schematic with dashed lines")},
+		// a product photo overprinted with callout markers (a shower system with a, b, c in
+		// blue circles pointing at its parts) illustrates a parts list; crop_kind() folds it
+		// into drawing so it never becomes a card photo
+		{Name: "callout", Prompts: []string{
+			"a product photo with lettered callout markers a, b and c in circles",
+			"a photo of a shower system with letters in blue circles pointing at its parts",
+			"a photo of plumbing fixtures annotated with circled letters",
+			"a photo with numbered callout bubbles 1, 2 and 3 over the product",
+			"a product photo overlaid with small labelled circles and leader lines",
+			"an assembled faucet photo with parts marked by circled letters",
+		}},
 		{Name: "spec", Prompts: expand([]string{
 			"a photo of a %s with dimension lines and measurements in inches",
 			"a product photo of a %s annotated with sizes and arrows",

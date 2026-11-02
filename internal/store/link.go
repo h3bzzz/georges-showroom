@@ -158,9 +158,17 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		    CASE WHEN cc.kind <> 'photo' AND cc.vkind = 'photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2 THEN 'photo' ELSE cc.kind END AS kind,
 		    COALESCE(cc.hd_path,cc.path) AS path, COALESCE(cc.hd_w,cc.w) AS w, cc.catalog_id, cc.page,
 		    row_number() OVER (PARTITION BY fc.family_id, (CASE WHEN cc.kind <> 'photo' AND cc.vkind = 'photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2 THEN 'photo' ELSE cc.kind END) ORDER BY
+		      -- a whole-product photograph that suits the category, in a sane frame, before a
+		      -- handle close-up, a skinny strip or a 160 px fragment (which still serve when
+		      -- nothing better is linked)
+		      (cc.vkind IS DISTINCT FROM 'detail' OR COALESCE(cc.vscore,0) < 0.3) DESC,
+		      (cc.vsubject IS NULL OR COALESCE(cc.vsubscore,0) < 0.45 OR subject_fits(cc.vsubject, pf.category_path)) DESC,
+		      (cc.w::real/GREATEST(cc.h,1) BETWEEN 0.45 AND 2.4) DESC,
+		      (LEAST(cc.w,cc.h) >= 120) DESC,
 		      (cc.w*cc.h >= 40000) DESC,
 		      (fc.how IN ('exact','family','norm','suffix')) DESC,
 		      (fc.how = 'near') DESC,
+		      (cc.vkind = 'photo' AND COALESCE(cc.vscore,0) >= 0.6) DESC,
 		      COALESCE(cc.quality, 0.3) DESC,
 		      LEAST(u.n, 50) ASC,
 		      cc.score DESC, cc.w*cc.h DESC) AS rn,
@@ -251,13 +259,17 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		  FROM catalog_crops cc
 		  WHERE (cc.kind='photo' OR (cc.vkind='photo' AND COALESCE(cc.vscore,0) >= 0.6 AND COALESCE(cc.quality,0) >= 0.2)) AND cc.w >= 300 AND cc.h >= 200
 		    AND (cc.vkind IS NULL OR cc.vkind = 'photo')
+		    -- a borrowed picture is held to a higher standard than the family's own: no
+		    -- skinny strips (a 456×2200 sliver of a kitchen), no room scenes
+		    AND cc.w::real/cc.h BETWEEN 0.45 AND 2.4
+		    AND COALESCE(cc.vscene,0) < 0.5
 		    AND (SELECT count(*) FROM catalog_crops o WHERE o.catalog_id=cc.catalog_id AND o.page=cc.page AND o.kind='photo') <= 2
 		), pick AS (
 		  SELECT DISTINCT ON (pl.family_id) pl.family_id, o.path, o.w
 		  FROM placed pl
 		  JOIN product_families pf ON pf.id=pl.family_id
 		  JOIN openers o ON o.catalog_id=pl.catalog_id AND o.page BETWEEN pl.page-4 AND pl.page
-		  WHERE (o.vsubject IS NULL OR COALESCE(o.vsubscore,0) < 0.7 OR subject_fits(o.vsubject, pf.category_path))
+		  WHERE (o.vsubject IS NULL OR COALESCE(o.vsubscore,0) < 0.45 OR subject_fits(o.vsubject, pf.category_path))
 		    -- never across a printed section heading: the Charlotte opener on p.140 is not a
 		    -- picture of the kitchen faucet whose cross-reference prints on p.144 under the next
 		    -- heading (OCR'd headings are too noisy to serve as fences)
@@ -266,6 +278,32 @@ func (s *Store) RefreshFamilyBest(ctx context.Context) error {
 		)
 		UPDATE family_best fb SET photo_path=pick.path, photo_w=pick.w, photo_how='series', updated_at=now()
 		FROM pick WHERE pick.family_id=fb.family_id`)
+	if err != nil {
+		return err
+	}
+	// photo_grade (migration 00047): how far the picture can be trusted, read by Browse so the
+	// first pages of a query show whole products and the doubtful cards wait
+	_, err = s.Pool.Exec(ctx, `
+		UPDATE family_best fb SET photo_grade = g.grade
+		FROM (
+		  SELECT fb.family_id, CASE
+		    WHEN fb.web_path IS NOT NULL THEN 0
+		    WHEN fb.photo_path IS NULL THEN 3
+		    WHEN cc.id IS NULL THEN 1
+		    WHEN (cc.vkind = 'detail' AND COALESCE(cc.vscore,0) >= 0.3)
+		      OR (cc.vkind IN ('callout','drawing','spec','text','other','lifestyle') AND COALESCE(cc.vscore,0) >= 0.4)
+		      OR cc.w::real/GREATEST(cc.h,1) NOT BETWEEN 0.45 AND 2.4
+		      OR LEAST(cc.w,cc.h) < 100
+		      OR (cc.vsubject IS NOT NULL AND COALESCE(cc.vsubscore,0) >= 0.45 AND NOT subject_fits(cc.vsubject, pf.category_path))
+		      OR COALESCE(cc.vscene,0) >= 0.5 THEN 2
+		    WHEN fb.photo_how = 'crop' AND cc.vkind = 'photo' AND COALESCE(cc.vscore,0) >= 0.6
+		      AND (cc.vsubject IS NULL OR COALESCE(cc.vsubscore,0) < 0.45 OR subject_fits(cc.vsubject, pf.category_path))
+		      AND LEAST(cc.w,cc.h) >= 120 THEN 0
+		    ELSE 1 END AS grade
+		  FROM family_best fb
+		  JOIN product_families pf ON pf.id=fb.family_id
+		  LEFT JOIN catalog_crops cc ON fb.photo_path IS NOT NULL AND (cc.path=fb.photo_path OR cc.hd_path=fb.photo_path)
+		) g WHERE g.family_id=fb.family_id AND fb.photo_grade IS DISTINCT FROM g.grade`)
 	if err != nil {
 		return err
 	}

@@ -365,11 +365,16 @@ func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, 
 	// brand balance first, then the picture: every round seats each brand's best-fitting
 	// family, so one book with bronze photographs of everything (Emtek) cannot fill the page.
 	// A family whose only picture shows another metal (fit -1) waits behind every round.
-	order := fmt.Sprintf("rel DESC, core DESC, parts, nophoto, (fit < 0), GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, tier, small, h", slots)
+	// pic buckets the card picture (family_best.photo_grade, migration 00047): 0 a vendor
+	// master or a confident whole-product photo, 1 an acceptable one, 2 a doubtful one (a
+	// handle close-up, a callout diagram, a sliver, a wrong subject), 3 none. The first two
+	// share a bucket so the brand round-robin still mixes books; doubtful cards wait behind
+	// every good one and families without a picture come last.
+	order := fmt.Sprintf("rel DESC, core DESC, parts, pic, (fit < 0), GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, grade, tier, small, h", slots)
 	if finishAsked {
 		// a finish page never opens with a picture of another metal, whatever the type or
 		// category score ("brushed nickel faucet": a category hit in a brass photograph waits)
-		order = fmt.Sprintf("(fit < 0), rel DESC, core DESC, parts, nophoto, GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, tier, small, h", slots)
+		order = fmt.Sprintf("(fit < 0), rel DESC, core DESC, parts, pic, GREATEST((rb-1)/%d, (rt-1)*3), fit DESC, xact DESC, grade, tier, small, h", slots)
 	}
 	switch f.Sort {
 	case "price_asc":
@@ -381,7 +386,11 @@ func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, 
 	}
 	args = append(args, f.PerPage, (f.Page-1)*f.PerPage)
 	q := fmt.Sprintf(`WITH r AS (
-		  SELECT f.id, (%s) AS rel, %s AS core, f.tier, %s AS parts, (fb.photo_path IS NULL) AS nophoto, (%s) AS fit, (%s) AS xact,
+		  SELECT f.id, (%s) AS rel, %s AS core, f.tier, %s AS parts, (fb.photo_path IS NULL AND fb.web_path IS NULL) AS nophoto,
+		    COALESCE(fb.photo_grade, CASE WHEN fb.photo_path IS NULL AND fb.web_path IS NULL THEN 3 ELSE 1 END) AS grade,
+		    (CASE WHEN COALESCE(fb.photo_grade, CASE WHEN fb.photo_path IS NULL AND fb.web_path IS NULL THEN 3 ELSE 1 END) >= 2
+		          THEN COALESCE(fb.photo_grade, 3) ELSE 0 END) AS pic,
+		    (%s) AS fit, (%s) AS xact,
 		    f.brand_id, b.name AS brand, lower(COALESCE(f.title,'')) AS title,
 		    (COALESCE(fb.photo_w,0) < 400) AS small, hashtext(f.id::text) AS h,
 		    (SELECT min(our_cents(p.source,p.price_cents,p.msrp_cents,b.price_multiplier)) FROM products p WHERE p.family_id=f.id) AS lo,
@@ -389,10 +398,10 @@ func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, 
 		  %s%s),
 		o AS (
 		  SELECT r.*,
-		    row_number() OVER (PARTITION BY rel, core, parts, nophoto, (fit < 0), brand_id ORDER BY fit DESC, xact DESC, tier, small, h) AS rb,
-		    row_number() OVER (PARTITION BY rel, core, parts, nophoto, (fit < 0), brand_id, title ORDER BY fit DESC, xact DESC, tier, small, h) AS rt
+		    row_number() OVER (PARTITION BY rel, core, parts, pic, (fit < 0), brand_id ORDER BY fit DESC, xact DESC, grade, tier, small, h) AS rb,
+		    row_number() OVER (PARTITION BY rel, core, parts, pic, (fit < 0), brand_id, title ORDER BY fit DESC, xact DESC, grade, tier, small, h) AS rt
 		  FROM r)
-		SELECT id, rel, tier, nophoto, fit, xact, GREATEST((rb-1)/%d, (rt-1)*3) AS round, brand FROM o ORDER BY %s LIMIT $%d OFFSET $%d`,
+		SELECT id, rel, tier, nophoto, grade, fit, xact, GREATEST((rb-1)/%d, (rt-1)*3) AS round, brand FROM o ORDER BY %s LIMIT $%d OFFSET $%d`,
 		rel, core, parts, fit, xact, browseFrom, where, slots, order, len(args)-1, len(args))
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
@@ -403,6 +412,7 @@ func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, 
 		Rel     int
 		Tier    int
 		NoPhoto bool
+		Grade   int
 		Fit     int
 		Exact   bool
 		Round   int
@@ -415,7 +425,7 @@ func (s *Store) rankFamilies(ctx context.Context, f BrowseFilter, where string, 
 	ids := make([]int64, 0, len(rs))
 	for _, r := range rs {
 		if os.Getenv("RANK_DEBUG") != "" {
-			fmt.Printf("rank %d rel=%d tier=%d nophoto=%v fit=%d exact=%v round=%d %s\n", r.ID, r.Rel, r.Tier, r.NoPhoto, r.Fit, r.Exact, r.Round, r.Brand)
+			fmt.Printf("rank %d rel=%d tier=%d nophoto=%v grade=%d fit=%d exact=%v round=%d %s\n", r.ID, r.Rel, r.Tier, r.NoPhoto, r.Grade, r.Fit, r.Exact, r.Round, r.Brand)
 		}
 		ids = append(ids, r.ID)
 	}
