@@ -65,26 +65,23 @@ templ Product(p Page, f *store.Family, related []store.Card) {
 					<span class="muted small">List price · trade pricing at the counter</span>
 				</div>
 				if len(f.Items) > 0 {
+					{{ shown, rest := splitItems(f.Items, 24) }}
 					<div class="finishes">
-						<div class="label">
-							if len(f.Items) == 1 {
-								Model
-							} else {
-								{ Itoa(len(f.Items)) } finishes
-							}
-						</div>
+						<div class="label">{ itemsLabel(f.Items) }</div>
 						{{ sel := selectedItem(f.Items, photos) }}
 						<ul class="finish-list" id="finishes">
-							for i, it := range f.Items {
+							for i, it := range shown {
 								<li>
-									<button type="button" class={ "finish", templ.KV("on", i == sel), templ.KV("has-photo", it.Hash != nil) } data-sku={ it.SKU } data-price={ Price(it.PriceCents) } data-finish={ finishLabel(it) } data-hash={ derefS(it.Hash) } data-w={ Itoa(deref(it.ImgW)) } data-h={ Itoa(deref(it.ImgH)) }>
+									<button type="button" class={ "finish", templ.KV("on", i == sel), templ.KV("has-photo", it.Hash != nil) } data-sku={ it.SKU } data-price={ Price(it.PriceCents) } data-finish={ finishLabelN(it, len(f.Items)) } data-hash={ derefS(it.Hash) } data-w={ Itoa(deref(it.ImgW)) } data-h={ Itoa(deref(it.ImgH)) }>
 										if it.Hash != nil {
 											<img src={ Thumb(*it.Hash) } alt="" width="44" height="44" loading="lazy"/>
 										} else {
 											<i class="dot big" { SwatchStyle(toneOf(it.Finish))... }></i>
 										}
-										<span class="f-name">{ finishLabel(it) }</span>
-										<span class="f-sku">{ it.SKU }</span>
+										<span class="f-name">{ finishLabelN(it, len(f.Items)) }</span>
+										if it.Finish != nil && *it.Finish != "" {
+											<span class="f-sku">{ it.SKU }</span>
+										}
 										if pr := Price(it.PriceCents); pr != "" {
 											<span class="f-price">{ pr }</span>
 										}
@@ -92,6 +89,24 @@ templ Product(p Page, f *store.Family, related []store.Card) {
 								</li>
 							}
 						</ul>
+						if len(rest) > 0 {
+							<details class="all-models">
+								<summary>All { Itoa(len(f.Items)) } models</summary>
+								<table class="specs models">
+									<thead><tr><th>Model</th><th>Finish / option</th><th>Price</th></tr></thead>
+									<tbody>
+										for i, it := range f.Items {
+											if i < 400 {
+												<tr><td>{ it.SKU }</td><td>{ derefS(it.Finish) }</td><td>{ Price(it.PriceCents) }</td></tr>
+											}
+										}
+									</tbody>
+								</table>
+								if len(f.Items) > 400 {
+									<p class="muted small">{ Itoa(len(f.Items) - 400) } more models — ask the showroom for the full list.</p>
+								}
+							</details>
+						}
 						<p class="finish-note muted small" id="finish-note" hidden></p>
 					</div>
 				}

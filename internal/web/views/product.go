@@ -97,6 +97,43 @@ func finishLabel(it store.Item) string {
 	return "Standard"
 }
 
+// finishLabelN names a model button: the finish when known, the SKU when the family has
+// several models with no finish name (option codes), "Standard" for a lone model.
+func finishLabelN(it store.Item, n int) string {
+	if it.Finish != nil && *it.Finish != "" {
+		return *it.Finish
+	}
+	if n > 1 {
+		return it.SKU
+	}
+	return "Standard"
+}
+
+// splitItems keeps the first n models as buttons and the rest for the table.
+func splitItems(items []store.Item, n int) ([]store.Item, []store.Item) {
+	if len(items) <= n {
+		return items, nil
+	}
+	return items[:n], items[n:]
+}
+
+// itemsLabel heads the model list: "Model", "7 finishes" or "978 models".
+func itemsLabel(items []store.Item) string {
+	if len(items) == 1 {
+		return "Model"
+	}
+	finishes := map[string]bool{}
+	for _, it := range items {
+		if it.Finish != nil && *it.Finish != "" {
+			finishes[*it.Finish] = true
+		}
+	}
+	if len(finishes) >= len(items)/2 && len(finishes) > 1 {
+		return Itoa(len(items)) + " finishes"
+	}
+	return Itoa(len(items)) + " models"
+}
+
 func toneOf(finish *string) string {
 	if finish == nil {
 		return ""
