@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -69,8 +70,33 @@ func (s *emtekSource) candidates(sku string) (string, []string) {
 		if url, ok := s.byMF[n[1]+"|"+code]; ok {
 			return code, []string{url}
 		}
+		// no photo in this finish: the same model in another finish still shows the design
+		// (the store labels the picture with the finish its file name carries, never ours)
+		for _, c := range etkPreferred {
+			if url, ok := s.byMF[n[1]+"|"+c]; ok && c != code {
+				return c, []string{url}
+			}
+		}
+		for _, k := range s.modelKeys(n[1]) {
+			return k[len(n[1])+1:], []string{s.byMF[k]}
+		}
 	}
 	return "", nil
+}
+
+// etkPreferred orders the stand-in finishes: the catalog convention is chrome or satin nickel.
+var etkPreferred = []string{"US26", "US15", "US26D", "US15A", "US10B", "US19", "MB", "FB", "US3", "US4", "US7", "US14"}
+
+// modelKeys lists the model|code keys of one model, sorted for a stable choice.
+func (s *emtekSource) modelKeys(model string) []string {
+	var out []string
+	for k := range s.byMF {
+		if strings.HasPrefix(k, model+"|") {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 func (s *emtekSource) valid(body []byte) bool { return len(body) > 8000 }
 func (s *emtekSource) file(u, sku, _ string) string {
