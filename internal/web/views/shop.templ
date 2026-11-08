@@ -125,6 +125,23 @@ templ ShopBody(f store.Filter, r *store.Result, tiles []taxonomy.Tile, tileCards
 					<div class="empty">
 						<h2>Nothing matches yet.</h2>
 						<p>Try fewer filters, another finish, or search by model number.</p>
+						if len(r.DidYouMean) > 0 {
+							<div class="dym">
+								<div class="eyebrow">Did you mean</div>
+								<ul>
+									for _, sg := range r.DidYouMean {
+										<li><a href={ sg.URL }>
+											<span class="s-img">
+												if sg.Hash != nil {
+													<img src={ Thumb(*sg.Hash) } alt="" width="40" height="40" loading="lazy"/>
+												}
+											</span>
+											<span class="s-text"><span>{ sg.Label }</span><small>{ sg.Sub }</small></span>
+										</a></li>
+									}
+								</ul>
+							</div>
+						}
 					</div>
 				} else {
 					<ul class="grid">

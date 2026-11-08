@@ -185,6 +185,10 @@ func (s *Server) shop(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, r, err)
 		return
 	}
+	if res.Total == 0 && f.Query != "" {
+		// a model number typed short or with the wrong punctuation: offer the nearest ones
+		res.DidYouMean, _ = s.st.Suggest(ctx, f.Query, 8)
+	}
 	var tiles []taxonomy.Tile
 	tileCards := map[string]store.Card{}
 	if f.Room != "" && f.Category == "" && f.Query == "" && f.Brand == "" {

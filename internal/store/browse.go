@@ -65,6 +65,8 @@ type Result struct {
 	Brands     []Facet
 	Categories []Facet
 	Tones      []Facet
+	// DidYouMean lists the closest products when a search matched nothing.
+	DidYouMean []Suggestion
 	Took       time.Duration
 }
 
@@ -146,8 +148,12 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 		}
 		var rel []string
 		if in.SKU != "" {
-			w.add("sku", `(EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(k) LIKE $1) OR sd.blob ILIKE $2)`, in.SKU+"%", "%"+strings.ToLower(in.SKU)+"%")
-			rel = append(rel, fmt.Sprintf(`(CASE WHEN EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(k) = %s) THEN 10 ELSE 0 END)`, lit(in.SKU)))
+			// the lower-cased blob carries every SKU; LIKE on it uses the trigram index, where
+			// an unnest over the skus array could not
+			// both the printed form and the punctuation-free form, so a partial model number
+			// ("K-50") still reaches K50-100-45-PC and its siblings
+			w.add("sku", `(sd.blob LIKE $1 OR sd.blob LIKE $2)`, "%"+strings.ToLower(in.SKU)+"%", "%"+strings.ToLower(search.NormSKU(in.SKU))+"%")
+			rel = append(rel, fmt.Sprintf(`(CASE WHEN EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(k) = %s) THEN 10 WHEN sd.blob LIKE %s THEN 3 ELSE 0 END)`, lit(in.SKU), lit("%"+strings.ToLower(search.NormSKU(in.SKU))+"%")))
 		}
 		if in.Text != "" {
 			// full text first, trigram as the fallback for misspellings and OCR'd titles
@@ -188,24 +194,26 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 		order = "sd.price_cents DESC NULLS LAST, "
 	}
 	// fixtures before parts, pictured before unpictured, trusted pictures before doubtful,
-	// then relevance. Without a query or a brand filter, brands take turns two cards at a
-	// time (a round-robin by rank within brand) so one maker's price book cannot fill a page.
-	// family_id breaks ties so pages stay stable.
+	// then relevance. Without a query, brands take turns two cards at a time (a round-robin
+	// by rank within brand) so one maker's price book cannot fill a page. The default orders
+	// are precomputed into sd.ord / sd.ord_cat (migration 00012) so a page is an index walk;
+	// only searches and price sorts order at request time. family_id breaks ties so pages
+	// stay stable.
 	bucket := "sd.tier, CASE WHEN sd.grade <= 1 THEN 0 ELSE sd.grade END"
-	inner := bucket + ", " + rank + ", sd.family_id"
 	switch {
-	case f.Query == "" && f.Brand == "" && f.Sort == "" && f.Category != "" && len(taxonomy.Resolve(f.Category)) == 1:
-		order += bucket + ", sd.rr_cat, " + rank + ", sd.family_id"
-	case f.Query == "" && f.Brand == "" && f.Sort == "":
-		order += bucket + ", sd.rr_room, " + rank + ", sd.family_id"
+	case f.Sort != "":
+		order += bucket + ", " + rank + ", sd.family_id"
+	case f.Query != "":
+		order = bucket + ", " + rank + ", sd.family_id"
+	case f.Category != "" && f.Brand == "" && len(taxonomy.Resolve(f.Category)) == 1:
+		order = "sd.ord_cat, sd.family_id"
 	default:
-		order += inner
+		order = "sd.ord, sd.family_id"
 	}
 	args := append(bargs, f.PerPage, (f.Page-1)*f.PerPage)
 	q := fmt.Sprintf(`
 		SELECT sd.family_id, sd.brand, sd.brand_slug, sd.title, sd.collection, sd.category, sd.price_cents,
-		       sd.card_hash, sd.card_w, sd.card_h, sd.card_lqip, sd.grade, sd.tones, sd.finishes, sd.skus[1:4],
-		       count(*) OVER()::int
+		       sd.card_hash, sd.card_w, sd.card_h, sd.card_lqip, sd.grade, sd.tones, sd.finishes, sd.skus[1:4]
 		FROM search_docs sd WHERE %s ORDER BY %s LIMIT $%d OFFSET $%d`, base, order, len(args)-1, len(args))
 	rows, err := s.Pool.Query(ctx, q, args...)
 	if err != nil {
@@ -215,12 +223,18 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 	for rows.Next() {
 		var c Card
 		if err := rows.Scan(&c.FamilyID, &c.Brand, &c.BrandSlug, &c.Title, &c.Collection, &c.Category, &c.PriceCents,
-			&c.Hash, &c.W, &c.H, &c.LQIP, &c.Grade, &c.Tones, &c.Finishes, &c.SKUs, &res.Total); err != nil {
+			&c.Hash, &c.W, &c.H, &c.LQIP, &c.Grade, &c.Tones, &c.Finishes, &c.SKUs); err != nil {
 			return nil, err
 		}
 		res.Cards = append(res.Cards, c)
 	}
 	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// the total is a separate, cached count: a window count would scan every matching row
+	// on every page request
+	res.Total, err = s.total(ctx, base, bargs)
+	if err != nil {
 		return nil, err
 	}
 	res.Pages = (res.Total + f.PerPage - 1) / f.PerPage
@@ -280,8 +294,24 @@ func (s *Store) facet(ctx context.Context, q string, args []any) ([]Facet, error
 
 func lit(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
 
+// total counts a filter's rows, cached by the rendered WHERE clause and its arguments.
+func (s *Store) total(ctx context.Context, where string, args []any) (int, error) {
+	key := "total|" + where + "|" + fmt.Sprint(args...)
+	if c := facetCache.get(key); c != nil {
+		return c.total, nil
+	}
+	var n int
+	if err := s.Pool.QueryRow(ctx, `SELECT count(*)::int FROM search_docs sd WHERE `+where, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("total: %w", err)
+	}
+	facetCache.put(key, &facetEntry{total: n})
+	return n, nil
+}
+
 type facetEntry struct {
 	brands, cats, tones []Facet
+	total               int
+	rooms               map[string]int
 	at                  time.Time
 }
 
@@ -296,7 +326,8 @@ func (c *facetMemo) get(k string) *facetEntry {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e := c.m[k]
-	if e == nil || time.Since(e.at) > 2*time.Minute {
+	// the catalog changes offline (index build), so a half hour of staleness costs nothing
+	if e == nil || time.Since(e.at) > 30*time.Minute {
 		return nil
 	}
 	return e
@@ -314,6 +345,9 @@ func (c *facetMemo) put(k string, e *facetEntry) {
 
 // RoomCounts returns families per room for the navigation.
 func (s *Store) RoomCounts(ctx context.Context) (map[string]int, error) {
+	if c := facetCache.get("rooms"); c != nil && c.rooms != nil {
+		return c.rooms, nil
+	}
 	rows, err := s.Pool.Query(ctx, `SELECT room, count(*)::int FROM search_docs WHERE room IS NOT NULL AND tier <> 2 GROUP BY 1`)
 	if err != nil {
 		return nil, err
@@ -328,7 +362,11 @@ func (s *Store) RoomCounts(ctx context.Context) (map[string]int, error) {
 		}
 		out[r] = n
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	facetCache.put("rooms", &facetEntry{rooms: out})
+	return out, nil
 }
 
 // Suggestion is one typeahead row.
@@ -376,8 +414,8 @@ func (s *Store) Suggest(ctx context.Context, q string, limit int) ([]Suggestion,
 		        + CASE WHEN lower(coalesce(sd.collection,'')) LIKE $2||'%' THEN 2 ELSE 0 END
 		        + similarity(sd.blob, $2) + CASE WHEN sd.grade <= 1 THEN 0.5 ELSE 0 END) AS score
 		FROM search_docs sd
-		WHERE sd.tier <> 2 AND sd.blob ILIKE '%'||$2||'%'
-		ORDER BY score DESC, sd.pop DESC LIMIT $3`, q, lq, limit)
+		WHERE sd.tier <> 2 AND (sd.blob LIKE '%'||$2||'%' OR sd.blob LIKE '%'||$4||'%')
+		ORDER BY score DESC, sd.pop DESC LIMIT $3`, q, lq, limit, strings.ToLower(search.NormSKU(q)))
 	if err != nil {
 		return nil, err
 	}

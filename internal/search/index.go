@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -97,7 +98,9 @@ func (ix *Indexer) Run(ctx context.Context) (int, error) {
 			if skus == nil {
 				skus = []string{}
 			}
-			blob := strings.ToLower(strings.Join(compact(d.Title, deref(d.Collection), d.Brand, strings.Join(skus, " "), strings.Join(d.Finishes, " ")), " "))
+			// SKUs go in twice: as printed and with punctuation stripped, so "K-50" finds
+			// K50-100-45-PC and "k50100" finds K-50-100 (the trigram index covers both)
+			blob := strings.ToLower(strings.Join(compact(d.Title, deref(d.Collection), d.Brand, strings.Join(skus, " "), NormSKUs(skus), strings.Join(d.Finishes, " ")), " "))
 			// tsv is filled by the UPDATE below; COPY cannot call to_tsvector per row
 			// pop: what makes a card worth showing first within its bucket — a priced product
 			// with a title that reads cleanly, several finishes, a collection, and a big picture
@@ -145,12 +148,36 @@ func (ix *Indexer) Run(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("round robin: %w", err)
 	}
+	// the precomputed browse orders (migration 00012): index walks instead of sorts
+	_, err = tx.Exec(ctx, `
+		UPDATE search_docs SET
+		  ord     = ((tier::bigint * 4 + CASE WHEN grade <= 1 THEN 0 ELSE grade END) * 1000000 + LEAST(rr_room, 999999)) * 100000 + LEAST(99999, GREATEST(0, 50000 - round(pop * 1000)))::bigint,
+		  ord_cat = ((tier::bigint * 4 + CASE WHEN grade <= 1 THEN 0 ELSE grade END) * 1000000 + LEAST(rr_cat, 999999)) * 100000 + LEAST(99999, GREATEST(0, 50000 - round(pop * 1000)))::bigint`)
+	if err != nil {
+		return 0, fmt.Errorf("ord: %w", err)
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err
 	}
 	ix.Pool.Exec(ctx, `ANALYZE search_docs`)
 	slog.Info("index built", "docs", n, "took", time.Since(start).Round(time.Millisecond))
 	return int(n), nil
+}
+
+var reSKUPunct = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+// NormSKU strips punctuation and upper-cases, the same key items.sku_norm uses.
+func NormSKU(s string) string { return reSKUPunct.ReplaceAllString(strings.ToUpper(s), "") }
+
+// NormSKUs joins the normalised forms of SKUs that differ from the printed form.
+func NormSKUs(skus []string) string {
+	var out []string
+	for _, s := range skus {
+		if n := NormSKU(s); n != strings.ToUpper(s) && n != "" {
+			out = append(out, n)
+		}
+	}
+	return strings.Join(out, " ")
 }
 
 func deref(s *string) string {
