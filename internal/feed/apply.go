@@ -34,6 +34,7 @@ type ApplyStats struct {
 
 type feedRow struct {
 	id                                   int64
+	model                                string
 	sku, skuNorm, upc, name, collection  string
 	category, subCategory, grp, typ      string
 	finish, finishGroup, desc, marketing string
@@ -50,7 +51,13 @@ type item struct {
 
 var reNonWord = regexp.MustCompile(`[^a-z0-9]+`)
 
+// groupKey is Unilog's own family notion: the model (the SKU without its finish/option
+// code, "Bal-6315-rls"), which keeps a lever's six finishes together without lumping a whole
+// series under one page. Rows with no model fall back to product name + collection.
 func groupKey(r feedRow) string {
+	if m := strings.TrimSpace(strings.ToLower(r.model)); m != "" {
+		return "model:" + m
+	}
 	n := strings.TrimSpace(strings.ToLower(r.name))
 	if n == "" {
 		n = "sku:" + r.skuNorm
@@ -120,7 +127,7 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 	ir.Close()
 	// feed rows grouped into families
 	fr, err := a.Pool.Query(ctx, `
-		SELECT product_id, sku, sku_norm, COALESCE(upc,''), COALESCE(product_name,''), COALESCE(collection,''), COALESCE(category,''), COALESCE(sub_category,''),
+		SELECT product_id, COALESCE(model,''), sku, sku_norm, COALESCE(upc,''), COALESCE(product_name,''), COALESCE(collection,''), COALESCE(category,''), COALESCE(sub_category,''),
 		       COALESCE(grp,''), COALESCE(type,''), COALESCE(finish,''), COALESCE(finish_group,''), COALESCE(description,''), COALESCE(marketing,''), bullets,
 		       COALESCE(msrp_cents,0), COALESCE(map_cents,0), COALESCE(dn_cents,0), attrs, COALESCE(spec_link,''), COALESCE(install_link,'')
 		FROM feed_products WHERE brand_code=$1 ORDER BY product_id`, code)
@@ -132,7 +139,7 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 	for fr.Next() {
 		var r feedRow
 		var attrs []byte
-		if err := fr.Scan(&r.id, &r.sku, &r.skuNorm, &r.upc, &r.name, &r.collection, &r.category, &r.subCategory, &r.grp, &r.typ, &r.finish, &r.finishGroup,
+		if err := fr.Scan(&r.id, &r.model, &r.sku, &r.skuNorm, &r.upc, &r.name, &r.collection, &r.category, &r.subCategory, &r.grp, &r.typ, &r.finish, &r.finishGroup,
 			&r.desc, &r.marketing, &r.bullets, &r.msrp, &r.mapc, &r.dn, &attrs, &r.spec, &r.install); err != nil {
 			fr.Close()
 			return err
@@ -162,6 +169,28 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 		batch = &pgx.Batch{}
 		return br.Close()
 	}
+	// a name shared by a whole series (Ashley Norton's "Colonial Passage", 978 SKUs) is split
+	// into designs by SKU skeleton so each page is one product in its finishes
+	var split []string
+	for _, k := range order {
+		g := groups[k]
+		if len(g) <= 40 || strings.HasPrefix(k, "model:") {
+			split = append(split, k)
+			continue
+		}
+		parts := splitBySkeleton(g)
+		if len(parts) <= 1 {
+			split = append(split, k)
+			continue
+		}
+		delete(groups, k)
+		for sk, rows := range parts {
+			nk := k + "#" + sk
+			groups[nk] = rows
+			split = append(split, nk)
+		}
+	}
+	order = split
 	for _, k := range order {
 		g := groups[k]
 		// which existing family do the matched SKUs point at?
@@ -183,6 +212,9 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 		title := strings.TrimSpace(lead.name)
 		if title == "" {
 			title = lead.sku
+		}
+		if i := strings.LastIndex(k, "#"); i > 0 && !strings.HasPrefix(k, "model:") {
+			title += " · " + k[i+1:] // the design code that tells sibling designs apart
 		}
 		room, category := classify(code, brandName, lead)
 		facts, attrs := mapAttrs(g)
@@ -301,9 +333,7 @@ func representative(g []feedRow) feedRow {
 	r.grp = pick(func(x feedRow) string { return x.grp })
 	r.typ = pick(func(x feedRow) string { return x.typ })
 	r.collection = pick(func(x feedRow) string { return x.collection })
-	if r.name == "" {
-		r.name = pick(func(x feedRow) string { return x.name })
-	}
+	r.name = commonName(g)
 	if r.desc == "" {
 		r.desc = pick(func(x feedRow) string { return x.desc })
 	}
@@ -311,6 +341,66 @@ func representative(g []feedRow) feedRow {
 		r.marketing = pick(func(x feedRow) string { return x.marketing })
 	}
 	return r
+}
+
+// commonName picks the family title: the product name most rows share; on ties the shortest,
+// since a longer variant usually appends a finish or an option.
+func commonName(g []feedRow) string {
+	counts := map[string]int{}
+	for _, x := range g {
+		if v := strings.TrimSpace(x.name); v != "" {
+			counts[v]++
+		}
+	}
+	best, n := "", 0
+	for v, c := range counts {
+		if c > n || c == n && (len(v) < len(best) || len(v) == len(best) && v < best) {
+			best, n = v, c
+		}
+	}
+	return best
+}
+
+var reSKUTokens = regexp.MustCompile(`[.\-/ ]+`)
+
+// splitBySkeleton divides a large same-name group by the SKU with its finish token removed.
+// The finish token is whichever end token (first or last) explains the group best: removing it
+// must fold the SKUs into clearly fewer skeletons (one design, several finishes) without
+// collapsing everything into one. Returns nil-equivalent (one part) when no split convinces.
+func splitBySkeleton(g []feedRow) map[string][]feedRow {
+	try := func(first bool) map[string][]feedRow {
+		parts := map[string][]feedRow{}
+		for _, r := range g {
+			toks := reSKUTokens.Split(strings.ToUpper(strings.TrimSpace(r.sku)), -1)
+			var skel string
+			switch {
+			case len(toks) < 2:
+				skel = toks[0]
+			case first:
+				skel = strings.Join(toks[1:], ".")
+			default:
+				skel = strings.Join(toks[:len(toks)-1], ".")
+			}
+			parts[skel] = append(parts[skel], r)
+		}
+		return parts
+	}
+	best := map[string][]feedRow(nil)
+	bestN := len(g) + 1
+	for _, first := range []bool{true, false} {
+		p := try(first)
+		n := len(p)
+		avg := float64(len(g)) / float64(n)
+		// a real finish token yields 2–16 rows per design; one or two skeletons means the
+		// token was not the finish
+		if n >= 3 && avg >= 1.8 && avg <= 16 && n < bestN {
+			best, bestN = p, n
+		}
+	}
+	if best == nil {
+		return map[string][]feedRow{"": g}
+	}
+	return best
 }
 
 // categoryMap turns Unilog category names into the site's leaves where they differ.

@@ -1,6 +1,7 @@
 package feed
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -66,6 +67,30 @@ func TestParse(t *testing.T) {
 	}
 }
 
+func TestSplitBySkeleton(t *testing.T) {
+	var g []feedRow
+	for _, design := range []string{"4900.30.3", "4900.30.4", "4900.20.3", "490.30-238", "4500.30.3", "4500.20.3", "3750.30.3", "1250.30.3", "9000.30.8", "3100.30.3", "2250.30.3"} {
+		for _, fin := range []string{"AN", "AR", "WM", "DB", "MW"} {
+			g = append(g, feedRow{sku: fin + "." + design, name: "Colonial Passage", finish: fin})
+		}
+	}
+	parts := splitBySkeleton(g)
+	if len(parts) != 11 {
+		t.Fatalf("want 11 designs, got %d", len(parts))
+	}
+	if len(parts["4900.30.3"]) != 5 {
+		t.Errorf("design should hold its 5 finishes: %v", parts)
+	}
+	// a group whose SKUs share no structure stays whole
+	var h []feedRow
+	for i := 0; i < 50; i++ {
+		h = append(h, feedRow{sku: fmt.Sprintf("X%d", i*7919)})
+	}
+	if len(splitBySkeleton(h)) != 1 {
+		t.Error("unstructured group must not split")
+	}
+}
+
 func TestClassifyAndAttrs(t *testing.T) {
 	room, cat := classify("ADT", "Aptations", feedRow{name: "Double Arm Wall Mirror", category: "Mirrors", typ: "Home Decor", grp: "Mirrors"})
 	if room != "bathroom" || cat != "Mirrors" {
@@ -96,5 +121,11 @@ func TestClassifyAndAttrs(t *testing.T) {
 	}
 	if groupKey(feedRow{name: "Helios  Lever", collection: "Modern"}) != groupKey(feedRow{name: "helios lever", collection: "MODERN"}) {
 		t.Error("group key should ignore case and spacing")
+	}
+	if groupKey(feedRow{model: "Bal-6315-rls", name: "6315 2.5BS B/B MRTS LCK"}) != groupKey(feedRow{model: "BAL-6315-RLS", name: "6315 2.5BS B/B MRTS LCK Oil Rubbed"}) {
+		t.Error("model should group regardless of name")
+	}
+	if commonName([]feedRow{{name: "Helios Lever Polished Nickel"}, {name: "Helios Lever"}, {name: "Helios Lever Matte Black"}, {name: "Helios Lever"}}) != "Helios Lever" {
+		t.Error("commonName")
 	}
 }
