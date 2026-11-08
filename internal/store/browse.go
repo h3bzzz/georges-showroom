@@ -318,6 +318,7 @@ type facetEntry struct {
 	brands, cats, tones []Facet
 	total               int
 	rooms               map[string]int
+	tiles               map[string]Card
 	at                  time.Time
 }
 

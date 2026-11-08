@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -125,6 +126,12 @@ func (s *Store) Covers(ctx context.Context) (map[string]Cover, error) {
 
 // TileCard picks a representative trusted card for a category tile.
 func (s *Store) TileCards(ctx context.Context, room string, groups []string) (map[string]Card, error) {
+	// eight "best pictured product in this group" lookups per room page; the answer only
+	// changes when the index is rebuilt, so it is cached with the facets
+	key := "tiles|" + room + "|" + strings.Join(groups, ",")
+	if c := facetCache.get(key); c != nil && c.tiles != nil {
+		return c.tiles, nil
+	}
 	out := map[string]Card{}
 	for _, g := range groups {
 		rows, err := s.Pool.Query(ctx, `
@@ -146,5 +153,6 @@ func (s *Store) TileCards(ctx context.Context, room string, groups []string) (ma
 		}
 		rows.Close()
 	}
+	facetCache.put(key, &facetEntry{tiles: out})
 	return out, nil
 }

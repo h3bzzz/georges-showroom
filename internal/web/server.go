@@ -76,7 +76,31 @@ func New(st *store.Store, dataDir, publicURL string, dev bool, assistant *chat.S
 	r.Get("/readyz", s.ready)
 	r.NotFound(s.notFound)
 	s.r = r
+	go s.warm()
 	return s
+}
+
+// warm fills the caches the first visitor would otherwise pay for (room counts, facets,
+// totals and tile cards of every room, the home page's featured row) and keeps them fresh,
+// so a cold page after a deploy or a cache expiry never costs the three seconds the facet
+// GROUP BYs take over 600k documents.
+func (s *Server) warm() {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		s.st.RoomCounts(ctx)
+		s.st.Browse(ctx, store.Filter{PerPage: 8})
+		for _, rm := range taxonomy.Rooms {
+			s.st.Browse(ctx, store.Filter{Room: rm.Slug, PerPage: 48, WithFacets: true})
+			tiles := taxonomy.RoomTiles[rm.Slug]
+			names := make([]string, len(tiles))
+			for i, t := range tiles {
+				names[i] = t.Name
+			}
+			s.st.TileCards(ctx, rm.Slug, names)
+		}
+		cancel()
+		time.Sleep(20 * time.Minute) // under the 30-minute cache life
+	}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.r.ServeHTTP(w, r) }
