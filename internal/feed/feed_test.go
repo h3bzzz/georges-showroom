@@ -91,6 +91,18 @@ func TestSplitBySkeleton(t *testing.T) {
 	}
 }
 
+func TestRepresentative(t *testing.T) {
+	g := []feedRow{
+		{name: "Helios Lever", category: "", typ: "Hardware", grp: "Interior Door"},
+		{name: "Helios Lever", category: "Levers", typ: "Hardware", grp: "Interior Door", desc: "A lever."},
+		{name: "Helios Lever Matte Black", category: "Levers", typ: "Hardware", grp: ""},
+	}
+	r := representative(g)
+	if r.category != "Levers" || r.grp != "Interior Door" || r.name != "Helios Lever" || r.desc != "A lever." {
+		t.Errorf("representative: %+v", r)
+	}
+}
+
 func TestClassifyAndAttrs(t *testing.T) {
 	room, cat := classify("ADT", "Aptations", feedRow{name: "Double Arm Wall Mirror", category: "Mirrors", typ: "Home Decor", grp: "Mirrors"})
 	if room != "bathroom" || cat != "Mirrors" {
