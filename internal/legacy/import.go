@@ -561,8 +561,12 @@ func (im *Importer) items(ctx context.Context) error {
 		batch.Queue(`
 			INSERT INTO items (family_id, brand_id, sku, sku_norm, finish, upc, list_cents, price_cents, price_flag, lead_time_days, url, source, legacy_id)
 			VALUES ($1,$2,$3,$4,NULLIF($5,''),NULLIF($6,''),$7,$8,$9,$10,NULLIF($11,''),$12,$13)
-			ON CONFLICT (brand_id, sku) DO UPDATE SET family_id=EXCLUDED.family_id, sku_norm=EXCLUDED.sku_norm, finish=EXCLUDED.finish, upc=EXCLUDED.upc,
-			  list_cents=EXCLUDED.list_cents, price_cents=EXCLUDED.price_cents, price_flag=EXCLUDED.price_flag, lead_time_days=EXCLUDED.lead_time_days,
+			ON CONFLICT (brand_id, sku) DO UPDATE SET family_id=EXCLUDED.family_id, sku_norm=EXCLUDED.sku_norm, finish=EXCLUDED.finish, upc=COALESCE(items.upc, EXCLUDED.upc),
+			  -- a price that came from the company price file outranks anything the v1 pipeline parsed
+			  list_cents=CASE WHEN items.price_source='pricefile' THEN items.list_cents ELSE EXCLUDED.list_cents END,
+			  price_cents=CASE WHEN items.price_source='pricefile' THEN items.price_cents ELSE EXCLUDED.price_cents END,
+			  price_flag=CASE WHEN items.price_source='pricefile' THEN items.price_flag ELSE EXCLUDED.price_flag END,
+			  lead_time_days=COALESCE(items.lead_time_days, EXCLUDED.lead_time_days),
 			  url=EXCLUDED.url, source=EXCLUDED.source, legacy_id=EXCLUDED.legacy_id
 			RETURNING id`,
 			famID, brandID, sku, NormSKU(sku), finish, upc, list, price, flag, lead, url, source, leg)

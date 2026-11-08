@@ -29,7 +29,7 @@ type Encoder struct {
 // Open reports that the encoder is not built in.
 func Open(context.Context, Options) (*Encoder, error) { return nil, ErrUnavailable }
 
-func (e *Encoder) Close() error                                       { return nil }
+func (e *Encoder) Close() error                                         { return nil }
 func (e *Encoder) Texts(context.Context, []string) ([][]float32, error) { return nil, ErrUnavailable }
 func (e *Encoder) Images(context.Context, []image.Image) ([][]float32, error) {
 	return nil, ErrUnavailable

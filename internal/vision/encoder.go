@@ -8,7 +8,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	"math"
 	"runtime"
 
 	"github.com/knights-analytics/hugot"
@@ -173,43 +172,4 @@ func Prepare(img image.Image) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, Side, Side))
 	xdraw.CatmullRom.Scale(dst, dst.Bounds(), sq, sq.Bounds(), xdraw.Src, nil)
 	return dst
-}
-
-// Dot is the cosine similarity of two unit vectors.
-func Dot(a, b []float32) float32 {
-	var s float32
-	for i := range a {
-		s += a[i] * b[i]
-	}
-	return s
-}
-
-// Normalize scales v to unit length in place and returns it.
-func Normalize(v []float32) []float32 {
-	var s float64
-	for _, x := range v {
-		s += float64(x) * float64(x)
-	}
-	if s == 0 {
-		return v
-	}
-	k := float32(1 / math.Sqrt(s))
-	for i := range v {
-		v[i] *= k
-	}
-	return v
-}
-
-// Mean averages vectors and normalises the result.
-func Mean(vs [][]float32) []float32 {
-	if len(vs) == 0 {
-		return nil
-	}
-	m := make([]float32, len(vs[0]))
-	for _, v := range vs {
-		for i := range m {
-			m[i] += v[i]
-		}
-	}
-	return Normalize(m)
 }

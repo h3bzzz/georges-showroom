@@ -15,7 +15,7 @@ VPS=${VPS:-root@160.238.36.50}
 REMOTE_DATA=${REMOTE_DATA:-/srv/georges/data}
 LOCAL_DATA=${DATA_DIR:-data/raw}
 DB_URL=${DATABASE_URL:-postgres://georges:georges@127.0.0.1:5432/georges?sslmode=disable}
-ROOTS=(crops crops_hd logos webimg catalogs specimg)
+ROOTS=(assets crops crops_hd logos webimg catalogs specimg docs tools)
 what=${1:-all}
 
 images() {

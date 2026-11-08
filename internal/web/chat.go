@@ -117,9 +117,9 @@ func indexByte(s string, c byte) int {
 
 // ipLimiter allows a burst of turns per visitor and a steady trickle after that.
 type ipLimiter struct {
-	mu   sync.Mutex
-	m    map[string]*visitor
-	rate rate.Limit
+	mu    sync.Mutex
+	m     map[string]*visitor
+	rate  rate.Limit
 	burst int
 }
 

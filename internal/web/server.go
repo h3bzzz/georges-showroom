@@ -31,13 +31,13 @@ import (
 var staticFS embed.FS
 
 type Server struct {
-	st        *store.Store
-	dataDir   string
-	publicURL string
-	dev       bool
-	r         chi.Router
-	render    *renditions
-	chat      *chat.Service
+	st          *store.Store
+	dataDir     string
+	publicURL   string
+	dev         bool
+	r           chi.Router
+	render      *renditions
+	chat        *chat.Service
 	chatLimiter *ipLimiter
 }
 

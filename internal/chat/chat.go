@@ -95,12 +95,12 @@ type Request struct {
 
 // Event is one server-sent event.
 type Event struct {
-	Type   string `json:"type"`             // status | delta | cards | shown | done | error
-	Text   string `json:"text,omitempty"`   // delta text or status line
-	Cards  []Card `json:"cards,omitempty"`  // products to render inline
-	Shown  []Shown `json:"shown,omitempty"` // every product referenced this turn (for the transcript)
-	Error  string `json:"error,omitempty"`
-	Turns  int    `json:"turns,omitempty"`
+	Type  string  `json:"type"`            // status | delta | cards | shown | done | error
+	Text  string  `json:"text,omitempty"`  // delta text or status line
+	Cards []Card  `json:"cards,omitempty"` // products to render inline
+	Shown []Shown `json:"shown,omitempty"` // every product referenced this turn (for the transcript)
+	Error string  `json:"error,omitempty"`
+	Turns int     `json:"turns,omitempty"`
 }
 
 // Card is a product tile the browser renders.
@@ -171,11 +171,11 @@ func (s *Service) Run(ctx context.Context, req Request, emit func(Event)) error 
 	turns := 0
 	for round := 0; round <= maxToolRounds; round++ {
 		params := anthropic.MessageNewParams{
-			Model:     s.Model,
-			MaxTokens: maxOutput,
-			System:    []anthropic.TextBlockParam{{Text: system, CacheControl: anthropic.NewCacheControlEphemeralParam()}},
-			Messages:  msgs,
-			Tools:     tools,
+			Model:        s.Model,
+			MaxTokens:    maxOutput,
+			System:       []anthropic.TextBlockParam{{Text: system, CacheControl: anthropic.NewCacheControlEphemeralParam()}},
+			Messages:     msgs,
+			Tools:        tools,
 			OutputConfig: anthropic.OutputConfigParam{Effort: anthropic.OutputConfigEffortLow},
 		}
 		if round == maxToolRounds {
