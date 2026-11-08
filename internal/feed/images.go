@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -19,6 +20,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jlaffaye/ftp"
 )
@@ -134,6 +136,13 @@ func (im *Images) Run(ctx context.Context) (int, error) {
 			return stored, err
 		}
 		if _, err := im.Pool.Exec(ctx, `INSERT INTO asset_links (asset_id, family_id, item_id, how, weight) VALUES ($1,$2,$3,'feed',0.6) ON CONFLICT DO NOTHING`, aid, t.familyID, t.itemID); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "23503" {
+				// the family was re-derived while we were downloading; the file stays cached
+				// and the next run links it
+				misses++
+				continue
+			}
 			return stored, err
 		}
 		stored++
