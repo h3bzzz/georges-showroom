@@ -38,8 +38,10 @@ func newSource(brand string) (source, error) {
 		return &emtekSource{}, nil
 	case "CHI":
 		return &chicagoSource{}, nil
+	case "SGM":
+		return &sigmaSource{}, nil
 	}
-	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK, CHI)", brand)
+	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK, CHI, SGM)", brand)
 }
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -229,4 +231,49 @@ func (s *chicagoSource) file(u, sku, _ string) string {
 		n = sku + ".jpg"
 	}
 	return n
+}
+
+// ---- Sigma Designs (map built by `vendors crawl --brand SGM`) -----------------------------
+// The site keys a picture by the base SKU ("1.22SP00"); the price book adds the finish as a
+// trailing ".NN" / ".NNX" code, so the lookup strips it.
+
+type sigmaSource struct{ bySKU map[string]string }
+
+var sgmFinish = regexp.MustCompile(`\.(\d{2}[A-Z]?)$`)
+
+func (s *sigmaSource) init(_ context.Context, f *Fetcher) error {
+	b, err := os.ReadFile(filepath.Join(f.DataDir, "webimg", "SGM", "_images.json"))
+	if err != nil {
+		return err
+	}
+	var rows []ImageRow
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return err
+	}
+	s.bySKU = map[string]string{}
+	for _, r := range rows {
+		if r.SKU != "" && r.URL != "" {
+			s.bySKU[strings.ToUpper(r.SKU)] = r.URL
+		}
+	}
+	return nil
+}
+func (s *sigmaSource) candidates(sku string) (string, []string) {
+	u := strings.ReplaceAll(strings.ToUpper(strings.TrimSpace(sku)), " ", "")
+	if url, ok := s.bySKU[u]; ok {
+		return "", []string{url}
+	}
+	if m := sgmFinish.FindStringSubmatch(u); m != nil {
+		if url, ok := s.bySKU[strings.TrimSuffix(u, m[0])]; ok {
+			return m[1], []string{url}
+		}
+	}
+	return "", nil
+}
+func (s *sigmaSource) valid(body []byte) bool { return len(body) > 6000 }
+func (s *sigmaSource) file(u, sku, _ string) string {
+	if n := baseName(u); n != "" {
+		return n
+	}
+	return sku + ".jpg"
 }

@@ -49,8 +49,10 @@ func (c *Crawler) Run(ctx context.Context) (int, error) {
 		return c.emtek(ctx)
 	case "CHI":
 		return c.chicago(ctx)
+	case "SGM":
+		return c.sigma(ctx)
 	}
-	return 0, fmt.Errorf("no crawler for %s (have ETK, CHI)", c.Brand)
+	return 0, fmt.Errorf("no crawler for %s (have ETK, CHI, SGM)", c.Brand)
 }
 
 func (c *Crawler) get(ctx context.Context, u string) ([]byte, int, error) {
@@ -281,5 +283,76 @@ func (c *Crawler) chicago(ctx context.Context) (int, error) {
 	}
 	n, err := c.mergeMap("_images.json", rows)
 	slog.Info("chicago crawl done", "visited", visited, "misses", misses, "map_rows", n)
+	return n, err
+}
+
+// ---- Sigma Designs: Magento sitemap → product page (itemprop sku, og:image) ---------------
+// sitemap.xml lists /catalog/product/view/id/<n>; the page prints the maker's SKU
+// (itemprop="sku", "1.22SP00") and an 800 px og:image under /pub/media/catalog/product/.
+
+var (
+	sgmLoc   = regexp.MustCompile(`<loc>(https?://www\.sigmafaucet\.com/catalog/product/view/id/\d+[^<]*)</loc>`)
+	sgmSKU   = regexp.MustCompile(`itemprop="sku"[^>]*>\s*([^<\s]+)`)
+	sgmImg   = regexp.MustCompile(`og:image" content="([^"]+)"`)
+	sgmCache = regexp.MustCompile(`/cache/[0-9a-f]+/`)
+)
+
+func (c *Crawler) sigma(ctx context.Context) (int, error) {
+	body, status, err := c.get(ctx, "https://www.sigmafaucet.com/sitemap.xml")
+	if err != nil {
+		return 0, err
+	}
+	if status != 200 {
+		return 0, fmt.Errorf("sigma sitemap: HTTP %d", status)
+	}
+	var urls []string
+	for _, m := range sgmLoc.FindAllStringSubmatch(string(body), -1) {
+		urls = append(urls, strings.Replace(m[1], "http://", "https://", 1))
+	}
+	slog.Info("sigma crawl", "product_urls", len(urls))
+	known := map[string]bool{}
+	if b, err := os.ReadFile(filepath.Join(c.DataDir, "webimg", c.Brand, "_images.json")); err == nil {
+		var have []ImageRow
+		_ = json.Unmarshal(b, &have)
+		for _, r := range have {
+			known[r.URL] = true
+		}
+	}
+	var rows []ImageRow
+	visited, misses := 0, 0
+	for _, u := range urls {
+		if ctx.Err() != nil {
+			break
+		}
+		if known["page:"+u] {
+			continue
+		}
+		body, status, err := c.get(ctx, u)
+		visited++
+		if err != nil || status != 200 {
+			misses++
+			continue
+		}
+		sm := sgmSKU.FindStringSubmatch(string(body))
+		im := sgmImg.FindStringSubmatch(string(body))
+		if sm == nil || im == nil {
+			misses++
+			continue
+		}
+		img := sgmCache.ReplaceAllString(im[1], "/") // the uncached original
+		rows = append(rows, ImageRow{SKU: strings.ToUpper(strings.TrimSpace(sm[1])), URL: img, Title: u})
+		if visited%200 == 0 {
+			slog.Info("sigma crawl", "visited", visited, "pictures", len(rows), "misses", misses)
+			if _, err := c.mergeMap("_images.json", rows); err != nil {
+				return 0, err
+			}
+			rows = rows[:0]
+		}
+		if c.Limit > 0 && visited >= c.Limit {
+			break
+		}
+	}
+	n, err := c.mergeMap("_images.json", rows)
+	slog.Info("sigma crawl done", "visited", visited, "misses", misses, "map_rows", n)
 	return n, err
 }
