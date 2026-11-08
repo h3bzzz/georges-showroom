@@ -69,7 +69,18 @@ configs:
   caddyfile:
     content: |
       (site) {
-          encode zstd gzip
+          # compress pages and text assets; never the assistant's event stream (/chat), which
+          # must reach the browser token by token
+          encode zstd gzip {
+              match {
+                  header Content-Type text/html*
+                  header Content-Type text/css*
+                  header Content-Type application/javascript*
+                  header Content-Type application/json*
+                  header Content-Type image/svg+xml*
+                  header Content-Type application/xml*
+              }
+          }
           # product pictures: pre-built, content-addressed, immutable, straight from disk
           handle_path /a/* {
               root * /srv/assets
