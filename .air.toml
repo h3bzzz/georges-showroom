@@ -4,7 +4,7 @@ tmp_dir = ".air"
 
 [build]
   pre_cmd = ["go run github.com/a-h/templ/cmd/templ@v0.3.1100 generate -path internal/web/views"]
-  cmd = "go build -o bin/georges ./cmd/georges"
+  cmd = "go build -tags ORT -o bin/georges ./cmd/georges"
   entrypoint = ["bin/georges", "serve"]
   include_ext = ["go", "templ", "css", "js", "sql"]
   exclude_dir = [".air", "bin", "data", "docs", "testdata", ".chrome-profile", "deploy"]

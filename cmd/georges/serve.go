@@ -1,8 +1,11 @@
 package main
 
 import (
+	"log/slog"
+
 	"github.com/spf13/cobra"
 
+	"georges/internal/chat"
 	"georges/internal/httpx"
 	"georges/internal/store"
 	"georges/internal/web"
@@ -22,7 +25,18 @@ func serveCmd() *cobra.Command {
 			if addr == "" {
 				addr = cfg.Addr
 			}
-			srv := web.New(store.New(pool), cfg.DataDir, cfg.PublicURL, cfg.Dev())
+			st := store.New(pool)
+			assistant := chat.New(cfg.AnthropicAPIKey, cfg.ChatModel, st)
+			if assistant.Enabled() {
+				if m, err := openMatcher(cmd.Context(), pool); err == nil {
+					assistant.Matcher = m
+				} else {
+					slog.Warn("assistant runs without the picture matcher", "err", err)
+				}
+			} else {
+				slog.Info("assistant disabled: set ANTHROPIC_API_KEY in .env to enable it")
+			}
+			srv := web.New(st, cfg.DataDir, cfg.PublicURL, cfg.Dev(), assistant)
 			return httpx.Serve(cmd.Context(), addr, srv)
 		},
 	}

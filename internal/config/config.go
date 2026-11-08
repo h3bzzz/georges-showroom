@@ -30,6 +30,11 @@ type Config struct {
 	FTPHost     string `env:"FTP_HOST" envDefault:"ftp.myplumbingshowroom.com"`
 	FTPUser     string `env:"FTP_USER"`
 	FTPPass     string `env:"FTP_PASS"`
+
+	// AnthropicAPIKey enables the showroom assistant; empty hides it.
+	AnthropicAPIKey string `env:"ANTHROPIC_API_KEY"`
+	// ChatModel is the Claude model the assistant answers with.
+	ChatModel string `env:"CHAT_MODEL" envDefault:"claude-opus-5-5"`
 }
 
 // Load reads .env (when present) and the environment.

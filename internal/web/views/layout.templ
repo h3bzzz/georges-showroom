@@ -10,6 +10,8 @@ type Page struct {
 	Rooms       map[string]int
 	Query       string
 	Dev         bool
+	Chat        bool // the assistant is configured
+	Rep         bool // trade mode cookie present
 }
 
 templ Layout(p Page) {
@@ -70,6 +72,9 @@ templ Layout(p Page) {
 			<main id="main" class="wrap">
 				{ children... }
 			</main>
+			if p.Chat {
+				@ChatDrawer(p)
+			}
 			<footer class="ftr wrap">
 				<div>
 					<strong>George's Kitchen &amp; Bath</strong>
@@ -95,4 +100,52 @@ templ ErrorPage(p Page, code int, msg string) {
 			</p>
 		</section>
 	}
+}
+
+// ChatDrawer is the assistant: a launcher button and a panel the script in app.js drives.
+templ ChatDrawer(p Page) {
+	<button type="button" class="chat-launch" id="chat-launch" aria-controls="chat" aria-expanded="false" title="Ask the showroom">
+		<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H7l-4 3V12a8 8 0 0 1 8-8h2a8 8 0 0 1 8 8z"></path></svg>
+		<span>Ask the showroom</span>
+	</button>
+	<aside class="chat" id="chat" hidden aria-label="Showroom assistant" data-rep?={ p.Rep } data-page={ p.Canonical }>
+		<header class="chat-head">
+			<div>
+				<strong>George's assistant</strong>
+				<small class="muted">
+					if p.Rep {
+						Trade mode · answers from our catalog
+					} else {
+						Answers from our catalog and the makers' spec sheets
+					}
+				</small>
+			</div>
+			<button type="button" class="chat-reset" id="chat-reset" title="Start over">New chat</button>
+			<button type="button" class="chat-close" id="chat-close" aria-label="Close">×</button>
+		</header>
+		<div class="chat-log" id="chat-log" role="log" aria-live="polite">
+			<div class="chat-hello">
+				<p>Tell me the room, the look and the budget, or paste a model number. You can also attach a photo of a fixture you like and I'll find what we carry that resembles it.</p>
+				<div class="chat-starters">
+					<button type="button" data-q="Brushed nickel pull-down kitchen faucet under $800">Brushed nickel pull-down kitchen faucet under $800</button>
+					<button type="button" data-q="Wall-mount tub filler in matte black">Wall-mount tub filler in matte black</button>
+					<button type="button" data-q="Which brands do you carry for door hardware?">Which brands do you carry for door hardware?</button>
+					<button type="button" data-q="What is the spout reach of the Brizo Litze pull-down?">Spout reach of the Brizo Litze pull-down</button>
+				</div>
+			</div>
+		</div>
+		<form class="chat-form" id="chat-form" autocomplete="off">
+			<div class="chat-attach" id="chat-attach" hidden><img id="chat-attach-img" alt="Attached photo"/><button type="button" id="chat-attach-x" aria-label="Remove photo">×</button></div>
+			<div class="chat-row">
+				<label class="chat-photo" title="Attach a photo">
+					<input type="file" id="chat-file" accept="image/jpeg,image/png,image/webp"/>
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+				</label>
+				<textarea id="chat-input" rows="1" placeholder="Ask about a fixture, finish or brand…" aria-label="Your question" maxlength="2000"></textarea>
+				<button type="submit" class="chat-send" id="chat-send" aria-label="Send">
+					<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+				</button>
+			</div>
+		</form>
+	</aside>
 }

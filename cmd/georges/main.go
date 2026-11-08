@@ -39,7 +39,7 @@ func main() {
 			return nil
 		},
 	}
-	root.AddCommand(dbCmd(), serveCmd(), importCmd(), assetsCmd(), mediaCmd(), indexCmd(), specsCmd(), vendorsCmd())
+	root.AddCommand(dbCmd(), serveCmd(), importCmd(), assetsCmd(), mediaCmd(), indexCmd(), specsCmd(), vendorsCmd(), chatCmd(), visionCmd())
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err := root.ExecuteContext(ctx); err != nil {

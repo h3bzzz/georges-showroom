@@ -20,6 +20,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"georges/internal/assets"
+	"georges/internal/chat"
 	"georges/internal/httpx"
 	"georges/internal/store"
 	"georges/internal/taxonomy"
@@ -36,10 +37,13 @@ type Server struct {
 	dev       bool
 	r         chi.Router
 	render    *renditions
+	chat      *chat.Service
+	chatLimiter *ipLimiter
 }
 
-func New(st *store.Store, dataDir, publicURL string, dev bool) *Server {
-	s := &Server{st: st, dataDir: dataDir, publicURL: publicURL, dev: dev}
+// New wires the storefront. assistant may be nil or disabled; the chat UI then stays hidden.
+func New(st *store.Store, dataDir, publicURL string, dev bool, assistant *chat.Service) *Server {
+	s := &Server{st: st, dataDir: dataDir, publicURL: publicURL, dev: dev, chat: assistant, chatLimiter: newIPLimiter(20, 8)}
 	s.render = newRenditions(dataDir, st)
 	sub, _ := fs.Sub(staticFS, "static")
 	views.AssetVersion = httpx.Version(staticFS, "static/app.css")[:8]
@@ -64,6 +68,8 @@ func New(st *store.Store, dataDir, publicURL string, dev bool) *Server {
 	r.Get("/catalog/{id}/read", s.catalog)
 	r.Get("/catalog/{id}/page/{n}", s.catalogPage)
 	r.Get("/catalogs/search", s.catalogSearch)
+	r.Post("/chat", s.chatHandler)
+	r.Get("/rep", s.repHandler)
 	r.Get("/robots.txt", s.robots)
 	r.Get("/sitemap.xml", s.sitemap)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
@@ -78,7 +84,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.r.ServeHT
 // page fills the layout context every template needs.
 func (s *Server) page(ctx context.Context, r *http.Request, title string) views.Page {
 	rooms, _ := s.st.RoomCounts(ctx)
-	return views.Page{Title: title, Rooms: rooms, Query: r.URL.Query().Get("q"), Dev: s.dev, Canonical: s.publicURL + r.URL.Path}
+	rep := false
+	if c, err := r.Cookie("rep"); err == nil && c.Value == "1" {
+		rep = true
+	}
+	return views.Page{Title: title, Rooms: rooms, Query: r.URL.Query().Get("q"), Dev: s.dev, Canonical: s.publicURL + r.URL.Path, Chat: s.chat != nil && s.chat.Enabled(), Rep: rep}
 }
 
 func (s *Server) html(w http.ResponseWriter, r *http.Request, status int, c templ.Component) {
@@ -442,7 +452,7 @@ func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) robots(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
-	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /suggest\nDisallow: /search\nSitemap: %s/sitemap.xml\n", s.publicURL)
+	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /suggest\nDisallow: /search\nDisallow: /chat\nSitemap: %s/sitemap.xml\n", s.publicURL)
 }
 
 func (s *Server) sitemap(w http.ResponseWriter, r *http.Request) {

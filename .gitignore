@@ -8,3 +8,4 @@ bin/
 .air/
 node_modules/
 /georges
+.air.log
