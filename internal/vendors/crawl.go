@@ -2,6 +2,7 @@ package vendors
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -41,7 +42,19 @@ type ImageRow struct {
 // Run crawls one brand and returns rows written.
 func (c *Crawler) Run(ctx context.Context) (int, error) {
 	if c.Client == nil {
-		c.Client = &http.Client{Timeout: 45 * time.Second}
+		// HTTP/1.1 only: a stalled HTTP/2 stream on chicagofaucets.com hung a round trip past
+		// the client timeout; plain connections with short dial/header deadlines do not
+		tr := &http.Transport{
+			Proxy:                 http.ProxyFromEnvironment,
+			ForceAttemptHTTP2:     false,
+			TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
+			MaxIdleConns:          8,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   15 * time.Second,
+			ResponseHeaderTimeout: 25 * time.Second,
+			ExpectContinueTimeout: 2 * time.Second,
+		}
+		c.Client = &http.Client{Timeout: 40 * time.Second, Transport: tr}
 	}
 	c.lim = rate.NewLimiter(rate.Every(300*time.Millisecond), 1)
 	switch c.Brand {
@@ -59,7 +72,9 @@ func (c *Crawler) get(ctx context.Context, u string) ([]byte, int, error) {
 	if err := c.lim.Wait(ctx); err != nil {
 		return nil, 0, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	rctx, cancel := context.WithTimeout(ctx, 40*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(rctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, 0, err
 	}
