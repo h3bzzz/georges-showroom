@@ -47,6 +47,25 @@ func feedCmd() *cobra.Command {
 	}
 	apply.Flags().StringVar(&brand, "brand", "", "one brand code")
 	apply.Flags().BoolVar(&dry, "dry", false, "count only, write nothing")
-	c.AddCommand(load, apply)
+	var limit int
+	images := &cobra.Command{
+		Use:   "images",
+		Short: "Fetch the feed's product shots (ftp images/<BRAND>/) for families with no picture, as lowest-priority assets",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			im := &feed.Images{Pool: pool, DataDir: cfg.DataDir, Host: cfg.FTPHost, User: cfg.FTPUser, Pass: cfg.FTPPass, Brand: brand, Limit: limit, DryRun: dry}
+			n, err := im.Run(cmd.Context())
+			fmt.Printf("%d feed pictures stored; run `assets build --source feed`, `media pick`, `index build`\n", n)
+			return err
+		},
+	}
+	images.Flags().StringVar(&brand, "brand", "", "one brand code")
+	images.Flags().IntVar(&limit, "limit", 0, "stop after this many families")
+	images.Flags().BoolVar(&dry, "dry", false, "count only")
+	c.AddCommand(load, apply, images)
 	return c
 }

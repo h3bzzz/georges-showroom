@@ -172,6 +172,11 @@ func cardScore(c Candidate, f Family) float64 {
 		}
 	case "spec":
 		s += 1.2
+	case "feed":
+		// the Unilog feed's own product shot: small, but the maker's, and keyed to the SKU;
+		// it stands in only when no catalog or vendor picture exists (link weight keeps it
+		// under any SKU-linked crop)
+		s += 0.5
 	}
 	s += float64(c.LinkWeight) * 1.5
 	if c.Kind == "photo" {

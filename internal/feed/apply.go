@@ -187,11 +187,20 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 		room, category := classify(code, brandName, lead)
 		facts, attrs := mapAttrs(g)
 		finishes := finishList(g)
+		if finishes == nil {
+			finishes = []string{}
+		}
 		var bullets []string
+		if bullets == nil {
+			bullets = []string{}
+		}
 		for _, r := range g {
 			if len(r.bullets) > len(bullets) {
 				bullets = r.bullets
 			}
+		}
+		if bullets == nil {
+			bullets = []string{}
 		}
 		desc := lead.desc
 		if desc == "" {
@@ -229,7 +238,7 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 				  bullets = CASE WHEN cardinality(bullets)=0 THEN $6 ELSE bullets END,
 				  attributes = $7::jsonb || attributes,
 				  facts = $8::jsonb || facts,
-				  finishes = (SELECT array_agg(DISTINCT f) FROM unnest(finishes || $9::text[]) f),
+				  finishes = COALESCE((SELECT array_agg(DISTINCT f) FROM unnest(finishes || $9::text[]) f), '{}'),
 				  updated_at = now()
 				WHERE id=$1`, famID, lead.collection, category, room, desc, bullets, attrsJSON, factsJSON, finishes)
 		}
