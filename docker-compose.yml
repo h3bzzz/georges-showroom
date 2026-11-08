@@ -68,7 +68,15 @@ services:
 configs:
   caddyfile:
     content: |
+      # the preview gate: every visitor logs in as "georges" with the password whose bcrypt
+      # hash is GATE_HASH (caddy hash-password); remove the two "import gate" lines to open the site
+      (gate) {
+          basic_auth {
+              georges {$$GATE_HASH}
+          }
+      }
       (site) {
+          import gate
           # compress pages and text assets; never the assistant's event stream (/chat), which
           # must reach the browser token by token
           encode zstd gzip {
