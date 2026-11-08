@@ -223,9 +223,12 @@ func (c *Crawler) emtek(ctx context.Context) (int, error) {
 // always the SKU's, so the page has to be read).
 
 var (
-	chiLoc  = regexp.MustCompile(`<loc>(https://www\.chicagofaucets\.com/products/[^<]+)</loc>`)
-	chiImg  = regexp.MustCompile(`href="(/sites/default/files/components/[^"]+\.(?:jpg|jpeg|png))"`)
-	chiImg2 = regexp.MustCompile(`src="(/sites/default/files/styles/product_default/public/components/[^"?]+\.(?:jpg|jpeg|png))`)
+	chiLoc = regexp.MustCompile(`<loc>(https://www\.chicagofaucets\.com/products/[^<]+)</loc>`)
+	// the full-size component picture appears as a bare path (lightbox data attributes, hrefs);
+	// styled derivatives sit under /styles/<name>/public/components/ and are stripped back
+	chiImg   = regexp.MustCompile(`(/sites/default/files/components/[^"'?\s)]+\.(?:jpg|jpeg|png))`)
+	chiImg2  = regexp.MustCompile(`(/sites/default/files/styles/[a-z_]+/public/components/[^"'?\s)]+\.(?:jpg|jpeg|png))`)
+	chiStyle = regexp.MustCompile(`/styles/[a-z_]+/public`)
 )
 
 func (c *Crawler) chicago(ctx context.Context) (int, error) {
@@ -274,11 +277,23 @@ func (c *Crawler) chicago(ctx context.Context) (int, error) {
 			misses++
 			continue
 		}
+		// prefer the picture named after this SKU, then the page's first full-size one, then a
+		// styled derivative stripped back to the original
 		img := ""
-		if m := chiImg.FindStringSubmatch(string(body)); m != nil {
-			img = m[1]
-		} else if m := chiImg2.FindStringSubmatch(string(body)); m != nil {
-			img = strings.Replace(m[1], "/styles/product_default/public", "", 1)
+		page := string(body)
+		for _, m := range chiImg.FindAllStringSubmatch(page, -1) {
+			if strings.EqualFold(strings.TrimSuffix(baseName(m[1]), filepath.Ext(m[1])), sku) {
+				img = m[1]
+				break
+			}
+			if img == "" {
+				img = m[1]
+			}
+		}
+		if img == "" {
+			if m := chiImg2.FindStringSubmatch(page); m != nil {
+				img = chiStyle.ReplaceAllString(m[1], "")
+			}
 		}
 		if img == "" {
 			misses++
