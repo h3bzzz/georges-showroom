@@ -4,16 +4,16 @@ Done 2026-11-07: v2 skeleton, schema, importer, asset core + ladder, media picke
 index, storefront (home, shop, product, brands, catalogs, reader, typeahead), deploy files.
 
 - [x] `assets build` for every shown asset, `assets measure`, `media pick`, `index build` (2026-11-07).
-- [ ] Spec sheets: `specs fetch` covers CAL, CHI, NEW, KOL, KLL, LAV, BAL, BRZ (Brizo sits behind Imperva: the fetcher pauses once, then stops the brand). Still needed: Robern (series in the path), Toto, Infinity Drain, Hydro Systems, Native Trails (page scrape); Emtek, Watermark, Duravit, Rohl, Graff, Dornbracht (JavaScript portals: headless browser pass).
+- [ ] Spec sheets: `specs fetch` covers CAL, CHI, NEW, KOL, KLL, LAV, BAL, BRZ (Brizo sits behind Imperva: the fetcher pauses once, then stops the brand), plus BLA/GES/INF through the AF Supply mirror (2026-11-08, partial hit rate). Still needed: Robern (series in the path), Toto, Infinity Drain, Hydro Systems, Native Trails (page scrape); Emtek, Watermark, Duravit, Rohl, Graff, Dornbracht (JavaScript portals: headless browser pass).
 - [ ] Deploy v2 to the VPS: push branch, workflow builds `ghcr.io/h3bzzz/georges-showroom`, rsync `data/raw/assets`, pg_dump `georges2`; compose now serves `/a/*` from Caddy.
 - [x] `georges vendors fetch --brand CAL|BAL|WMK`: per-finish masters keyed to the SKU (2026-11-07).
 - [ ] Vendors next: Emtek via Wagtail page JSON (agent mapping SKU→finish image into data/raw/webimg/ETK/_finish_images.json), Brizo re-run when the Imperva gate lifts, Elkay Scene7, Hansgrohe Celum, Robern Scene7.
 - [ ] Finish renderings (user asked 2026-11-07): metal mask (BiRefNet) + per-finish transform learned from real pairs (same-treatment pairs reach 35 dB; cross-treatment needs re-lighting), always labelled "Rendered in X", replaced by the real photo when one lands; living-finish patina slider later.
-- [ ] SigLIP 2 base ONNX in Go (hugot): re-embed every asset, text→image search, photo→SKU matcher (`/match` endpoint) — the chatbot's eyes.
-- [ ] Chatbot: Claude API with tools over search_docs/items/documents + the matcher; rep mode with cost/lead time once the price file is parsed.
-- [ ] Display titles for junk-titled catalog families (brand + collection + type + mounting).
+- [x] Photo→product matcher (2026-11-08): `internal/vision` ported (CLIP ViT-B/16 through hugot, `-tags ORT`, cgo), int8 look-alike index over every shown picture, `georges vision embed|match|similar`. SigLIP 2 swap still open.
+- [x] Chatbot (2026-11-08): `internal/chat`, Claude tool use (search_products, get_product, search_catalog_pages, list_brands, similar_products), SSE streaming to a drawer on every page, photo attach, trade mode via `/rep`. Needs `ANTHROPIC_API_KEY` in .env / the VPS secret. Test from the terminal: `georges chat "…"`.
+- [x] Display titles (2026-11-08): `georges titles build` synthesises from the spec sheet's Product Type line, facts, category noun, collection and SKU.
 - [ ] Cut-outs for crops with busy backgrounds (BiRefNet_lite / BEN2 ONNX, offline).
 - [ ] Super-resolution A/B (SPAN / Compact) for crops under 400 px; drawings rendered from PDFs at 300 DPI instead.
-- [ ] Price file ingest (FTP) → items.price_cents / lead time; per-brand multipliers.
+- [ ] Price file ingest: code done 2026-11-08 (`georges prices list|fetch|inspect|ingest`, feed-first precedence, cost_cents for trade mode). Blocked on `FTP_PASS` in .env (printed on /Price-File-Access.HTML). Run `prices fetch`, `prices inspect` to confirm the column mapping, then `prices ingest` and `index build`.
 - [ ] Image QA loop: contact sheets of random pages, `assets reject`, re-pick.
 - [ ] Projects / quotes (SPEX parity): wish list → room-assigned PDF with spec sheets.

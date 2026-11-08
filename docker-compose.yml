@@ -6,6 +6,7 @@
 #   IMAGE_TAG          image tag to run (the workflow passes the commit SHA)
 #   DATA_PATH          host folder holding DATA_DIR (assets/, catalogs/, logos/, covers/, …)
 #   GATE_HASH          bcrypt hash of the preview password; leave empty to open the site
+#   ANTHROPIC_API_KEY  enables the showroom assistant (/chat); CHAT_MODEL picks the model
 services:
   db:
     image: postgres:16
@@ -36,6 +37,9 @@ services:
       DATA_DIR: /data
       ENV: prod
       PUBLIC_URL: https://${DOMAIN:-localhost}
+      # the showroom assistant (empty hides it); the picture matcher needs DATA_DIR/tools synced
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      CHAT_MODEL: ${CHAT_MODEL:-claude-opus-5-5}
     volumes:
       - ${DATA_PATH:-/srv/georges/data}:/data:ro
     expose:

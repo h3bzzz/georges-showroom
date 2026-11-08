@@ -2,7 +2,7 @@ name: Deploy
 
 on:
   push:
-    branches: [main]
+    branches: [main, v2]
   workflow_dispatch:
 
 permissions:
@@ -43,7 +43,8 @@ jobs:
           cache-to: type=gha,mode=max
 
   deploy:
-    if: vars.HOSTINGER_VM_ID != ''
+    # the VPS follows main; v2 pushes only test and build the image
+    if: github.ref == 'refs/heads/main' && vars.HOSTINGER_VM_ID != ''
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -58,5 +59,6 @@ jobs:
             IMAGE_TAG=${{ github.sha }}
             DOMAIN=${{ vars.DOMAIN }}
             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+            ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
             GATE_HASH=${{ secrets.GATE_HASH }}
             DATA_PATH=/srv/georges/data

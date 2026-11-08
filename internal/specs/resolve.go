@@ -31,6 +31,32 @@ var Resolvers = map[string]Resolver{
 	"LAV": lacava,
 	"BAL": baldwin,
 	"BRZ": brizo,
+	"BLA": afsupply("blanco"),
+	"GES": afsupply("Gessi"),
+	"INF": afsupply("infinity drain"),
+}
+
+// afsupply mirrors manufacturers' own sheets at a predictable path per brand folder and SKU
+// (a miss answers 200 with a small JPEG placeholder, which the fetcher rejects as not a PDF).
+// Used for brands whose own sites give no derivable URL.
+func afsupply(folder string) Resolver {
+	return func(sku, _ string, fin map[string]bool) []Candidate {
+		s := strings.ToUpper(strings.TrimSpace(sku))
+		var out []Candidate
+		add := func(m string) {
+			for _, o := range out {
+				if o.Name == m+".pdf" {
+					return
+				}
+			}
+			out = append(out, Candidate{"https://www.afsupply.com/pub/media/catalog/product/matridtech/" + url.PathEscape(folder) + "/spec/" + url.PathEscape(m) + ".pdf", m + ".pdf"})
+		}
+		add(s)
+		if b := base(s, fin); b != s {
+			add(b)
+		}
+		return out
+	}
 }
 
 var reFinishTail = regexp.MustCompile(`[-/.][A-Z0-9]{1,5}$`)

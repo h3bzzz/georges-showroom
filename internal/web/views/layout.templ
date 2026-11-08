@@ -81,7 +81,13 @@ templ Layout(p Page) {
 					<span>99 Palmetto Drive, Pasadena, CA 91105</span>
 					<a href="tel:+16267925547">626.792.5547</a>
 				</div>
-				<div class="muted">Showroom hours Mon–Fri 8–5, Sat 9–3. Trade pricing for professionals.</div>
+				<div class="muted">Showroom hours Mon–Fri 8–5, Sat 9–3. Trade pricing for professionals.
+					if p.Rep {
+						· <a href="/rep?on=0" hx-boost="false">Trade mode on</a>
+					} else {
+						· <a href="/rep?on=1" hx-boost="false">Trade mode</a>
+					}
+				</div>
 			</footer>
 		</body>
 	</html>
