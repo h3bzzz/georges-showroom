@@ -142,13 +142,18 @@ func (s *Service) Run(ctx context.Context, req Request, emit func(Event)) error 
 	system := s.systemPrompt(req)
 	var shown []Shown
 	seen := map[int64]bool{}
-	note := func(cards []Card) {
+	// note records what this turn showed and returns only the cards not shown yet, so two
+	// overlapping searches do not render the same tiles twice
+	note := func(cards []Card) []Card {
+		fresh := cards[:0:0]
 		for _, c := range cards {
 			if !seen[c.ID] {
 				seen[c.ID] = true
 				shown = append(shown, Shown{c.ID, c.Title})
+				fresh = append(fresh, c)
 			}
 		}
+		return fresh
 	}
 	// a photograph gets matched before the model sees it so its first answer already knows
 	// what we carry that looks like it
@@ -158,8 +163,7 @@ func (s *Service) Run(ctx context.Context, req Request, emit func(Event)) error 
 			if ms, err := s.Matcher.MatchImage(ctx, raw, 8); err == nil && len(ms) > 0 {
 				cards, txt := s.matchCards(ctx, ms)
 				if len(cards) > 0 {
-					note(cards)
-					emit(Event{Type: "cards", Cards: cards})
+					emit(Event{Type: "cards", Cards: note(cards)})
 					last := msgs[len(msgs)-1].OfUser
 					last.Content = append(last.Content, anthropic.NewTextBlock("Visually closest products in our catalog (CLIP similarity; verify the type and finish against the photo):\n"+txt))
 				}
@@ -225,9 +229,8 @@ func (s *Service) Run(ctx context.Context, req Request, emit func(Event)) error 
 				if status != "" {
 					emit(Event{Type: "status", Text: status})
 				}
-				if len(cards) > 0 {
-					note(cards)
-					emit(Event{Type: "cards", Cards: cards})
+				if fresh := note(cards); len(fresh) > 0 {
+					emit(Event{Type: "cards", Cards: fresh})
 				}
 				results = append(results, anthropic.NewToolResultBlock(tu.ID, out.text, out.err))
 			}
