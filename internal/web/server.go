@@ -1,810 +1,466 @@
-// Package web is the new George's storefront: chi router, templ views, htmx partials.
+// Package web is the storefront: chi routes, templ views, htmx partials. Every page is one
+// or two indexed queries over the read model; images are static files.
 package web
 
 import (
 	"context"
-	"crypto/sha1"
-	"crypto/sha256"
 	"embed"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"fmt"
-	"golang.org/x/image/draw"
-	"html"
-	"image"
-	"image/jpeg"
 	"io/fs"
-	"net"
+	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
+	"github.com/a-h/templ"
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
 
-	"georges_/internal/imgsrv"
-	"georges_/internal/ocr"
-	"georges_/internal/specs"
-	"georges_/internal/store"
-	"georges_/internal/web/views"
+	"georges/internal/assets"
+	"georges/internal/httpx"
+	"georges/internal/store"
+	"georges/internal/taxonomy"
+	"georges/internal/web/views"
 )
 
 //go:embed static/*
-var static embed.FS
+var staticFS embed.FS
 
 type Server struct {
-	st      *store.Store
-	dataDir string
-	img     *imgsrv.Server
-	r       chi.Router
-
-	marks sync.Map // logo path -> markHash, so the home page does not re-read every logo per request
+	st        *store.Store
+	dataDir   string
+	publicURL string
+	dev       bool
+	r         chi.Router
+	render    *renditions
 }
 
-type markHash struct {
-	mod time.Time
-	sum string
-}
-
-func New(st *store.Store, dataDir string) *Server {
-	s := &Server{st: st, dataDir: dataDir, img: imgsrv.New(dataDir)}
-	r := chi.NewRouter()
-	// no RealIP: it rewrites RemoteAddr from X-Forwarded-For / X-Real-IP, which would let any
-	// remote client pass loopbackOnly by sending the header
-	r.Use(middleware.RequestID, middleware.Logger, middleware.Recoverer, middleware.Compress(5), middleware.GetHead)
-	r.Use(middleware.Timeout(30 * time.Second))
-
-	sub, _ := fs.Sub(static, "static")
-	if css, err := fs.ReadFile(static, "static/app.css"); err == nil {
-		sum := sha256.Sum256(css)
-		views.AssetVersion = hex.EncodeToString(sum[:4])
-	}
-	r.Handle("/static/*", cacheFor(24*time.Hour, http.StripPrefix("/static/", http.FileServer(http.FS(sub)))))
-	// images only, allow-listed roots, no directory listings: DATA_DIR also holds Postgres and price files
-	r.Get("/files/*", s.img.Original)
-	r.Get("/img/*", s.img.Resized)
+func New(st *store.Store, dataDir, publicURL string, dev bool) *Server {
+	s := &Server{st: st, dataDir: dataDir, publicURL: publicURL, dev: dev}
+	s.render = newRenditions(dataDir, st)
+	sub, _ := fs.Sub(staticFS, "static")
+	views.AssetVersion = httpx.Version(staticFS, "static/app.css")[:8]
+	r := httpx.Base(dev)
+	r.Handle("/static/*", http.StripPrefix("/static/", httpx.Static(sub)))
+	r.Get("/a/*", s.asset)
+	r.Get("/files/*", s.file)
+	r.Get("/img/{w}/*", s.fileResized)
 
 	r.Get("/", s.home)
-	r.Get("/brands", s.brands)
-	r.Get("/brand/{slug}", s.brand)
 	r.Get("/shop", s.shop)
 	r.Get("/shop/{room}", s.shop)
-	r.Get("/products", s.products)
-	r.Get("/product/{id}", s.product)
-	r.Get("/search", s.search)
-	r.Get("/catalogs", s.catalogs)
-	r.Get("/catalog/{id}", s.catalog)
-	r.Get("/catalog/{id}/page/{n}", s.catalogPage)
-	r.Get("/catalog/{id}/thumb", s.catalogThumb)
-	r.Get("/catalog/{id}/cover", s.catalogCover)
-	r.Get("/catalog/{id}/page/{n}/text", s.catalogPageText)
+	r.Get("/search", s.shop)
+	r.Get("/suggest", s.suggest)
+	r.Get("/brands", s.brands)
+	r.Get("/brand/{slug}", s.brand)
+	r.Get("/p/{id}", s.product)
 	r.Get("/sku/{sku}", s.sku)
 	r.Get("/doc/{id}", s.doc)
-	r.Group(func(r chi.Router) {
-		r.Use(loopbackOnly) // curation + uploads: this machine only until there is real auth
-		r.Get("/admin/covers", s.adminCovers)
-		r.Post("/admin/covers", s.adminSetCover)
-		r.Options("/admin/logos/upload", s.adminLogoUpload)
-		r.Post("/admin/logos/upload", s.adminLogoUpload)
-	})
+	r.Get("/catalogs", s.catalogs)
+	r.Get("/catalog/{id}", s.catalog)
+	r.Get("/catalog/{id}/read", s.catalog)
+	r.Get("/catalog/{id}/page/{n}", s.catalogPage)
+	r.Get("/catalogs/search", s.catalogSearch)
+	r.Get("/robots.txt", s.robots)
+	r.Get("/sitemap.xml", s.sitemap)
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+	r.Get("/readyz", s.ready)
+	r.NotFound(s.notFound)
 	s.r = r
 	return s
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) { s.r.ServeHTTP(w, r) }
 
-// loopbackOnly rejects requests whose TCP peer is not this machine (RemoteAddr is never
-// rewritten from headers, see New).
-func loopbackOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		host, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			host = r.RemoteAddr
-		}
-		if ip := net.ParseIP(host); ip == nil || !ip.IsLoopback() {
-			http.Error(w, "admin routes are local-only", http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+// page fills the layout context every template needs.
+func (s *Server) page(ctx context.Context, r *http.Request, title string) views.Page {
+	rooms, _ := s.st.RoomCounts(ctx)
+	return views.Page{Title: title, Rooms: rooms, Query: r.URL.Query().Get("q"), Dev: s.dev, Canonical: s.publicURL + r.URL.Path}
 }
 
-func cacheFor(d time.Duration, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "public, max-age="+strconv.Itoa(int(d.Seconds())))
-		next.ServeHTTP(w, r)
-	})
+func (s *Server) html(w http.ResponseWriter, r *http.Request, status int, c templ.Component) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.WriteHeader(status)
+	if err := c.Render(r.Context(), w); err != nil {
+		slog.Error("render", "path", r.URL.Path, "err", err)
+	}
 }
 
-// roomCovers picks one real catalog cover per room for the landing tiles.
-var roomCovers = []struct {
-	Room, Href string
-	Books      [][2]string
-}{
-	{"Bathroom", "/shop/bathroom", [][2]string{{"GES", "GES_Bathroom_Collection"}, {"DRV", "PL26_Duravit_Pricebook"}, {"KOL", "KOL_Fixture_2025_Pricebook"}}},
-	{"Kitchen", "/shop/kitchen", [][2]string{{"GES", "Art_for_Chefs"}, {"BLA", "BLA-2025PriceBook"}, {"CAL", "CAL-2026Pricebook"}}},
-	{"Hardware", "/shop/hardware", [][2]string{{"ETK", "ETK_2026_Door_Hardware_Price_Book"}, {"RMH", "RMH_Full-Line-Brochure"}, {"BAL", "BAL_EstatePriceBook-2025"}}},
-	{"Appliances", "/shop/appliances", [][2]string{{"WFF", "2022JanDesignGuide"}, {"ZRO", "2021NovDesign Guide"}, {"BSH", "BoschRefrigeration2019Brochure"}, {"THE", "2020LookbookVolume7"}}},
+func (s *Server) fail(w http.ResponseWriter, r *http.Request, err error) {
+	slog.Error("handler", "path", r.URL.RequestURI(), "err", err)
+	msg := "Something went wrong on our side. Please try again in a moment."
+	if s.dev {
+		msg = err.Error()
+	}
+	s.html(w, r, http.StatusInternalServerError, views.ErrorPage(s.page(r.Context(), r, "Error"), 500, msg))
 }
 
-// roomTile picks the first candidate book with a lifestyle spread; else the first book's cover.
-func (s *Server) roomTile(ctx context.Context, room, href string, books [][2]string) views.RoomTile {
-	t := views.RoomTile{Room: room, Href: href, Page: 1}
-	slug := strings.ToLower(room)
-	if cur, _ := s.st.GetCover(ctx, "room", slug); cur.Path != "" {
-		t.Image = "/files/" + cur.Path
-		if cat, _ := s.st.CatalogByID(ctx, cur.CatalogID); cat != nil {
-			t.CatalogID, t.Caption, t.Page = cat.ID, cat.Title, cur.Page
-		}
-		return t
-	}
-	for _, ext := range []string{".jpg", ".jpeg", ".png", ".webp"} {
-		if _, err := os.Stat(filepath.Join(s.dataDir, "covers", slug+ext)); err == nil {
-			t.Image, t.Caption = "/files/covers/"+slug+ext, "George's"
-			return t
-		}
-	}
-	for _, b := range books {
-		cat, _ := s.st.CatalogByBook(ctx, b[0], b[1])
-		if cat == nil {
-			continue
-		}
-		if t.CatalogID == 0 {
-			t.CatalogID, t.Caption = cat.ID, cat.Title
-		}
-		if cv, _ := s.st.LifestyleCrop(ctx, cat.ID); cv.Path != "" {
-			t.CatalogID, t.Caption, t.Page, t.Image = cat.ID, cat.Title, cv.Page, "/files/"+cv.Path
-			break
-		}
-		if lp := s.st.LifestylePage(ctx, cat.ID); lp > 0 {
-			t.CatalogID, t.Caption, t.Page = cat.ID, cat.Title, lp
-			break
-		}
-	}
-	return t
+func (s *Server) notFound(w http.ResponseWriter, r *http.Request) {
+	s.html(w, r, http.StatusNotFound, views.ErrorPage(s.page(r.Context(), r, "Not found"), 404, "We couldn't find that page."))
 }
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+	defer cancel()
+	if err := s.st.Pool.Ping(ctx); err != nil {
+		http.Error(w, "db: "+err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	w.Write([]byte("ready"))
+}
+
+// ---- pages ----
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	b, f, p, c, pg, _ := s.st.Counts(ctx)
-	brands, _ := s.st.ListBrands(ctx)
-	books, _ := s.st.BrandBooks(ctx)
-	tiles := s.st.HomeTileViews(ctx)
-	var hero []views.HeroBook
-	for _, want := range [][2]string{{"CAL", "CAL-2026Pricebook"}, {"GRF", "GRF_Bathroom_Price_Book"}, {"HYS", "HYS-2025Pricelist"}, {"ASH", "ASH_2026_ManzoniPricedCatalog"}} {
-		if cat, _ := s.st.CatalogByBook(ctx, want[0], want[1]); cat != nil {
-			hb := views.HeroBook{ID: cat.ID, Title: cat.Title, Image: "/catalog/" + strconv.Itoa(cat.ID) + "/cover"}
-			hero = append(hero, hb)
-		}
-	}
-	// the home wall shows every maker that has a real mark, like the old site's Featured Brands
-	allCards, _ := s.st.BrandCards(ctx, false)
-	var featured []store.BrandCard
-	for _, c := range allCards {
-		if c.Logo != "" {
-			featured = append(featured, c)
-		}
-	}
-	featured = s.dedupeMarks(featured)
-	s.logoVersion(featured)
-	views.Home(views.Stats{Brands: b, Families: f, Products: p, Catalogs: c, Pages: pg}, hero, tiles, books, brands, featured).Render(ctx, w)
-}
-
-// logoVersion appends the logo file's mtime so a replaced mark bypasses the browser cache.
-func (s *Server) logoVersion(cards []store.BrandCard) {
-	for i := range cards {
-		p := strings.TrimPrefix(cards[i].Logo, "/files/")
-		if p == cards[i].Logo || p == "" {
-			continue
-		}
-		if st, err := os.Stat(filepath.Join(s.dataDir, filepath.FromSlash(p))); err == nil {
-			cards[i].Logo += "?v=" + strconv.FormatInt(st.ModTime().Unix(), 10)
-		}
-	}
-}
-
-// dedupeMarks keeps one tile per distinct logo file (sister brands often share a mark),
-// preferring the brand that actually has products or books.
-func (s *Server) dedupeMarks(cards []store.BrandCard) []store.BrandCard {
-	best := map[string]int{}
-	for i, c := range cards {
-		p := strings.TrimPrefix(strings.SplitN(c.Logo, "?", 2)[0], "/files/")
-		key := s.markKey(p)
-		if j, ok := best[key]; !ok || c.Families+c.Catalogs > cards[j].Families+cards[j].Catalogs {
-			best[key] = i
-		}
-	}
-	keep := map[int]bool{}
-	for _, i := range best {
-		keep[i] = true
-	}
-	var out []store.BrandCard
-	for i, c := range cards {
-		if keep[i] {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-// markKey identifies a logo by content so sister brands sharing one file collapse to one tile;
-// the hash is cached per path and recomputed only when the file changes.
-func (s *Server) markKey(rel string) string {
-	full := filepath.Join(s.dataDir, filepath.FromSlash(rel))
-	st, err := os.Stat(full)
+	covers, err := s.st.Covers(ctx)
 	if err != nil {
-		return rel
-	}
-	if v, ok := s.marks.Load(rel); ok && v.(markHash).mod.Equal(st.ModTime()) {
-		return v.(markHash).sum
-	}
-	b, err := os.ReadFile(full)
-	if err != nil {
-		return rel
-	}
-	sum := sha1.Sum(b)
-	h := markHash{mod: st.ModTime(), sum: hex.EncodeToString(sum[:])}
-	s.marks.Store(rel, h)
-	return h.sum
-}
-
-func (s *Server) brands(w http.ResponseWriter, r *http.Request) {
-	all, err := s.st.BrandCards(r.Context(), false)
-	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.fail(w, r, err)
 		return
 	}
-	s.logoVersion(all)
-	room := r.URL.Query().Get("room")
-	counts := map[string]int{}
-	var cards []store.BrandCard
-	for _, c := range all {
-		in := room == ""
-		for _, rm := range c.Rooms {
-			counts[rm]++
-			if rm == room {
-				in = true
-			}
-		}
-		if in {
-			cards = append(cards, c)
-		}
-	}
-	views.Brands(cards, room, counts, len(all)).Render(r.Context(), w)
-}
-
-func (s *Server) brand(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	b, err := s.st.BrandBySlug(ctx, chi.URLParam(r, "slug"))
-	if err != nil || b == nil {
-		http.NotFound(w, r)
-		return
-	}
-	page := atoi(r.URL.Query().Get("page"), 1)
-	cat := r.URL.Query().Get("category")
-	fams, total, err := s.st.ListFamilies(ctx, store.FamilyFilter{BrandSlug: b.Slug, Category: cat, Page: page})
+	feat, err := s.st.Browse(ctx, store.Filter{PerPage: 8, Sort: ""})
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.fail(w, r, err)
 		return
 	}
-	cats, _ := s.st.TopCategories(ctx, b.Slug, 40)
-	views.Brand(*b, fams, cats, cat, views.Pager{Page: page, Total: total, PerPage: 24, Base: "/brand/" + b.Slug + "?category=" + cat}).Render(ctx, w)
+	brands, _ := s.st.Brands(ctx)
+	books, _ := s.st.Catalogs(ctx, "")
+	if len(books) > 12 {
+		books = books[:12]
+	}
+	p := s.page(ctx, r, "")
+	p.Description = "George's Kitchen & Bath, Pasadena: faucets, sinks, tubs, showers, toilets, vanities, door and cabinet hardware from the brands designers specify."
+	s.html(w, r, 200, views.Home(p, covers, feat.Cards, brands, books))
 }
 
-// shop is the faceted browse page behind the room links.
+func parseFilter(r *http.Request) store.Filter {
+	q := r.URL.Query()
+	f := store.Filter{
+		Room:       chi.URLParam(r, "room"),
+		Category:   q.Get("category"),
+		Brand:      q.Get("brand"),
+		Tones:      q["tone"],
+		Query:      strings.TrimSpace(q.Get("q")),
+		Sort:       q.Get("sort"),
+		ShowParts:  q.Get("parts") == "1",
+		WithFacets: true,
+		PerPage:    48,
+	}
+	if f.Room != "" && taxonomy.RoomName(f.Room) == "" {
+		f.Room = ""
+	}
+	f.Page, _ = strconv.Atoi(q.Get("page"))
+	if n, err := strconv.ParseInt(q.Get("min"), 10, 64); err == nil && n > 0 {
+		f.PriceMin = n * 100
+	}
+	if n, err := strconv.ParseInt(q.Get("max"), 10, 64); err == nil && n > 0 {
+		f.PriceMax = n * 100
+	}
+	return f
+}
+
 func (s *Server) shop(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
-	q := r.URL.Query()
-	f := store.BrowseFilter{
-		Room: chi.URLParam(r, "room"), Category: q.Get("category"), Query: q.Get("q"), Sort: q.Get("sort"),
-		Exact: q.Get("exact") != "",
-		Page: min(max(atoi(q.Get("page"), 1), 1), 500), PerPage: 24,
-	}
-	for _, b := range q["brand"] {
-		if b != "" {
-			f.Brands = append(f.Brands, b)
-		}
-	}
-	for _, x := range q["finish"] {
-		if x != "" {
-			f.Finishes = append(f.Finishes, x)
-		}
-	}
-	for _, sp := range q["spec"] {
-		if k, v, ok := strings.Cut(sp, ":"); ok && k != "" && v != "" {
-			if f.Specs == nil {
-				f.Specs = map[string][]string{}
-			}
-			f.Specs[k] = append(f.Specs[k], v)
-		}
-	}
-	if v := atoi(q.Get("min"), 0); v > 0 {
-		f.MinCents = int64(v) * 100
-	}
-	if v := atoi(q.Get("max"), 0); v > 0 {
-		f.MaxCents = int64(v) * 100
-	}
-	valid := f.Room == ""
-	for _, rm := range store.Rooms {
-		if rm.Slug == f.Room {
-			valid = true
-		}
-	}
-	if !valid {
-		http.NotFound(w, r)
-		return
+	f := parseFilter(r)
+	var brand *store.Brand
+	if f.Brand != "" {
+		brand, _ = s.st.BrandBySlug(ctx, f.Brand)
 	}
 	res, err := s.st.Browse(ctx, f)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.fail(w, r, err)
 		return
 	}
-	rooms, _ := s.st.RoomCounts(ctx)
-	var banner views.RoomTile
-	var tiles []store.CategoryTile
-	for _, rc := range roomCovers {
-		if strings.EqualFold(rc.Room, f.Room) {
-			banner = s.roomTile(ctx, rc.Room, rc.Href, rc.Books)
-			if f.Category == "" && f.Query == "" && len(f.Brands) == 0 {
-				tiles, _ = s.st.CategoryTiles(ctx, f.Room, 8)
-			}
+	var tiles []taxonomy.Tile
+	tileCards := map[string]store.Card{}
+	if f.Room != "" && f.Category == "" && f.Query == "" && f.Brand == "" {
+		tiles = taxonomy.RoomTiles[f.Room]
+		names := make([]string, len(tiles))
+		for i, t := range tiles {
+			names[i] = t.Name
 		}
+		tileCards, _ = s.st.TileCards(ctx, f.Room, names)
 	}
-	views.Shop(f, res, views.ShopURL{F: f}, rooms, banner, tiles).Render(ctx, w)
+	title := "Shop"
+	switch {
+	case f.Query != "":
+		title = "Search: " + f.Query
+	case f.Category != "":
+		title = f.Category
+	case brand != nil:
+		title = brand.Name
+	case f.Room != "":
+		title = taxonomy.RoomName(f.Room)
+	}
+	p := s.page(ctx, r, title)
+	if r.Header.Get("HX-Request") != "" && r.Header.Get("HX-Target") == "shop" {
+		s.html(w, r, 200, views.ShopBody(f, res, tiles, tileCards, brand))
+		return
+	}
+	s.html(w, r, 200, views.Shop(p, f, res, tiles, tileCards, brand))
 }
 
-func (s *Server) products(w http.ResponseWriter, r *http.Request) {
-	// legacy: send old links to the shop page, mapping ?category=Bathroom etc. to rooms
-	q := r.URL.Query()
-	cat := q.Get("category")
-	for _, rm := range store.Rooms {
-		if strings.EqualFold(cat, rm.Name) {
-			q.Del("category")
-			http.Redirect(w, r, "/shop/"+rm.Slug+"?"+q.Encode(), http.StatusFound)
-			return
-		}
-	}
-	http.Redirect(w, r, "/shop?"+q.Encode(), http.StatusFound)
-}
-
-func (s *Server) productsLegacy(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	q := r.URL.Query()
-	page := atoi(q.Get("page"), 1)
-	f := store.FamilyFilter{BrandSlug: q.Get("brand"), Category: q.Get("category"), Query: q.Get("q"), Page: page}
-	fams, total, err := s.st.ListFamilies(ctx, f)
+func (s *Server) brand(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	b, err := s.st.BrandBySlug(r.Context(), slug)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.fail(w, r, err)
 		return
 	}
-	base := "/products?q=" + q.Get("q") + "&brand=" + q.Get("brand") + "&category=" + q.Get("category")
-	pager := views.Pager{Page: page, Total: total, PerPage: 24, Base: base}
-	if r.Header.Get("HX-Request") != "" {
-		views.ProductGrid(fams, pager).Render(ctx, w)
+	if b == nil {
+		s.notFound(w, r)
 		return
 	}
-	cats, _ := s.st.TopCategories(ctx, "", 30)
-	views.Products(fams, cats, f, pager).Render(ctx, w)
+	q := r.URL.Query()
+	q.Set("brand", slug)
+	r.URL.RawQuery = q.Encode()
+	s.shop(w, r)
+}
+
+func (s *Server) brands(w http.ResponseWriter, r *http.Request) {
+	bs, err := s.st.Brands(r.Context())
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	s.html(w, r, 200, views.Brands(s.page(r.Context(), r, "Brands"), bs))
+}
+
+func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	items, err := s.st.Suggest(r.Context(), q, 7)
+	if err != nil {
+		slog.Warn("suggest", "err", err)
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "private, max-age=30")
+	views.Suggest(items, q).Render(r.Context(), w)
 }
 
 func (s *Server) product(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	fam, err := s.st.FamilyByID(ctx, id)
-	if err != nil || fam == nil {
-		http.NotFound(w, r)
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		s.notFound(w, r)
 		return
 	}
-	skus, _ := s.st.ProductsForFamily(ctx, id)
-	docs, _ := s.st.DocumentsForFamily(ctx, id)
-	imgs, _ := s.st.ImagesForFamily(ctx, id)
-	pages, _ := s.st.PagesForFamily(ctx, id, 8)
-	drawings, _ := s.st.DrawingsForFamily(ctx, id)
-	sibs, _ := s.st.Siblings(ctx, *fam, 8)
-	views.Product(*fam, skus, docs, imgs, pages, drawings, sibs).Render(ctx, w)
+	f, err := s.st.FamilyByID(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
+		return
+	}
+	if f == nil {
+		s.notFound(w, r)
+		return
+	}
+	related, _ := s.st.Related(r.Context(), f, 8)
+	p := s.page(r.Context(), r, f.Brand.Name+" "+f.Title)
+	if f.Description != nil {
+		p.Description = views.Truncate(*f.Description, 160)
+	}
+	s.html(w, r, 200, views.Product(p, f, related))
 }
 
-// search is the htmx endpoint behind the header search box.
-func (s *Server) search(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	q := strings.TrimSpace(r.URL.Query().Get("q"))
-	if len(q) < 2 {
-		w.Write([]byte(""))
+func (s *Server) sku(w http.ResponseWriter, r *http.Request) {
+	id, err := s.st.FamilyBySKU(r.Context(), chi.URLParam(r, "sku"))
+	if err != nil {
+		s.fail(w, r, err)
 		return
 	}
-	fams, total, _ := s.st.ListFamilies(ctx, store.FamilyFilter{Query: q, PerPage: 8})
-	hits, _ := s.st.SearchCatalogText(ctx, q, 5)
-	// a model number no product carries yet (its book not read, or a printed cross-reference):
-	// the pages that print it, and the SKU page that gathers every crop and mention
-	skuURL := ""
-	var skuHits []store.CatalogHit
-	if k := ocr.Normalize(strings.Join(strings.Fields(q), "")); ocr.LooksLikeSKU(k) {
-		skuURL = "/sku/" + url.PathEscape(k)
-		if len(fams) == 0 {
-			skuHits, _ = s.st.SKUPages(ctx, k, 6)
-			// the same page found again by its text is noise next to the SKU hit
-			seen := map[[2]int]bool{}
-			for _, h := range skuHits {
-				seen[[2]int{h.CatalogID, h.Page}] = true
+	if id == 0 {
+		http.Redirect(w, r, "/search?q="+chi.URLParam(r, "sku"), http.StatusFound)
+		return
+	}
+	http.Redirect(w, r, fmt.Sprintf("/p/%d", id), http.StatusMovedPermanently)
+}
+
+func (s *Server) doc(w http.ResponseWriter, r *http.Request) {
+	id, _ := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	var url string
+	var p *string
+	err := s.st.Pool.QueryRow(r.Context(), `SELECT url, path FROM documents WHERE id=$1`, id).Scan(&url, &p)
+	if err != nil {
+		s.notFound(w, r)
+		return
+	}
+	if p != nil {
+		if abs, err := assets.Abs(s.dataDir, *p); err == nil {
+			if _, err := os.Stat(abs); err == nil {
+				w.Header().Set("Content-Type", "application/pdf")
+				w.Header().Set("Cache-Control", "public, max-age=604800")
+				http.ServeFile(w, r, abs)
+				return
 			}
-			kept := hits[:0]
-			for _, h := range hits {
-				if !seen[[2]int{h.CatalogID, h.Page}] {
-					kept = append(kept, h)
-				}
-			}
-			hits = kept
 		}
 	}
-	views.SearchResults(q, fams, total, hits, skuHits, skuURL).Render(ctx, w)
+	http.Redirect(w, r, url, http.StatusFound)
 }
 
 func (s *Server) catalogs(w http.ResponseWriter, r *http.Request) {
-	groups, err := s.st.CatalogGroups(r.Context())
+	brand := r.URL.Query().Get("brand")
+	books, err := s.st.Catalogs(r.Context(), brand)
 	if err != nil {
-		http.Error(w, err.Error(), 500)
+		s.fail(w, r, err)
 		return
 	}
-	if code := r.URL.Query().Get("brand"); code != "" {
-		kept := groups[:0]
-		for _, g := range groups {
-			if strings.EqualFold(g.Code, code) {
-				kept = append(kept, g)
-			}
-		}
-		groups = kept
-	}
-	views.Catalogs(groups).Render(r.Context(), w)
+	s.html(w, r, 200, views.Catalogs(s.page(r.Context(), r, "Catalogs"), books, brand))
 }
 
 func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	id := atoi(chi.URLParam(r, "id"), 0)
-	c, err := s.st.CatalogByID(ctx, id)
-	if err != nil || c == nil {
-		http.NotFound(w, r)
+	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
+	c, err := s.st.CatalogByID(r.Context(), id)
+	if err != nil {
+		s.fail(w, r, err)
 		return
 	}
-	n := atoi(r.URL.Query().Get("p"), 1)
-	if n < 1 {
-		n = 1
-	}
-	if c.Pages > 0 && n > c.Pages {
-		n = c.Pages
-	}
-	tocs, _ := s.st.TOC(ctx, id)
-	skus, _ := s.st.PageSKUMap(ctx, id)
-	ocrd := 0
-	if len(tocs) == 0 {
-		ocrd = s.st.CatalogProgress(ctx, id)
-	}
-	views.Catalog(*c, n, tocs, skus, ocrd).Render(ctx, w)
-}
-
-// adminCovers is the curation page: for a room, its banner and category tiles with candidates.
-func (s *Server) adminCovers(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	room := r.URL.Query().Get("room")
-	if room == "" {
-		room = "bathroom"
-	}
-	if room == "home" {
-		s.adminHomeTiles(w, r)
+	if c == nil {
+		s.notFound(w, r)
 		return
 	}
-	var rc views.RoomTile
-	for _, c := range roomCovers {
-		if strings.EqualFold(c.Room, room) {
-			rc = s.roomTile(ctx, c.Room, c.Href, c.Books)
-		}
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
 	}
-	roomCands, _ := s.st.CoverCandidates(ctx, room, "", 18)
-	tiles, _ := s.st.CategoryTiles(ctx, room, 12)
-	var sets []views.CoverSet
-	for _, t := range tiles {
-		cands, _ := s.st.CoverCandidates(ctx, room, t.Name, 10)
-		sets = append(sets, views.CoverSet{Tile: t, Candidates: cands})
+	if c.Pages != nil && page > *c.Pages {
+		page = *c.Pages
 	}
-	views.AdminCovers(room, rc, roomCands, sets).Render(ctx, w)
+	toc, _ := s.st.TOC(r.Context(), id)
+	title := c.Name
+	if c.Title != nil {
+		title = *c.Title
+	}
+	s.html(w, r, 200, views.Reader(s.page(r.Context(), r, title), c, page, toc))
 }
 
-// adminHomeTiles curates the landing tile photographs; tiles are resolved fresh (no memo) so a
-// pick shows at once, and the candidates are the same pool the automatic choice draws from.
-func (s *Server) adminHomeTiles(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	used := map[string]bool{}
-	sets := make([]views.HomeCoverSet, 0, len(store.HomeTiles))
-	for _, t := range store.HomeTiles {
-		sets = append(sets, views.HomeCoverSet{Tile: s.st.ResolveHomeTile(ctx, t, used), Candidates: s.st.HomeTileCandidates(ctx, t, 12)})
-	}
-	views.AdminHomeTiles(sets).Render(ctx, w)
-}
-
-// adminSetCover stores a pick (or clears it) and re-renders the affected block.
-func (s *Server) adminSetCover(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	_ = r.ParseForm()
-	kind, key, path := r.FormValue("kind"), r.FormValue("key"), r.FormValue("path")
-	cat, page := atoi(r.FormValue("catalog_id"), 0), atoi(r.FormValue("page"), 0)
-	if r.FormValue("clear") != "" {
-		_ = s.st.ClearCover(ctx, kind, key)
-	} else if path != "" {
-		_ = s.st.SetCover(ctx, kind, key, path, cat, page)
-	}
-	room := r.FormValue("room")
-	http.Redirect(w, r, "/admin/covers?room="+room+"#"+views.AnchorFor(kind, key), http.StatusSeeOther)
-}
-
-// sku shows everything we know about one SKU string: catalog crops and pages mentioning it.
-func (s *Server) sku(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
-	sku := strings.ToUpper(strings.TrimSpace(chi.URLParam(r, "sku")))
-	crops, _ := s.st.CropsForSKUView(ctx, sku)
-	pages, _ := s.st.PagesMentioning(ctx, sku, 30)
-	views.SKU(sku, crops, pages).Render(ctx, w)
-}
-
-// catalogPage serves a page image from DATA_DIR/catalogs/<CODE>/<name>/NNNN.jpg.
 func (s *Server) catalogPage(w http.ResponseWriter, r *http.Request) {
-	id := atoi(chi.URLParam(r, "id"), 0)
-	n := atoi(chi.URLParam(r, "n"), 0)
-	c, err := s.st.CatalogByID(r.Context(), id)
-	if err != nil || c == nil || n < 1 {
+	id, _ := strconv.Atoi(chi.URLParam(r, "id"))
+	n, _ := strconv.Atoi(chi.URLParam(r, "n"))
+	rel, err := s.st.PagePath(r.Context(), id, n)
+	if err != nil || rel == "" {
 		http.NotFound(w, r)
 		return
 	}
-	path := filepath.Join(s.dataDir, "catalogs", c.BrandCode, safeName(c.Name), fmt.Sprintf("%04d.jpg", n))
-	if _, err := os.Stat(path); err != nil {
-		// not downloaded yet: redirect to the vendor flipbook image
-		http.Redirect(w, r, fmt.Sprintf("https://catalogs.myplumbingshowroom.com/%s/%s/files/large/%d.jpg", c.BrandCode, strings.ReplaceAll(c.Name, " ", "%20"), n), http.StatusFound)
-		return
-	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	http.ServeFile(w, r, path)
-}
-
-// catalogPageText renders the OCR words of one page as an invisible, selectable text layer
-// positioned over the page image (percent coordinates, so it scales with the image).
-func (s *Server) catalogPageText(w http.ResponseWriter, r *http.Request) {
-	id := atoi(chi.URLParam(r, "id"), 0)
-	n := atoi(chi.URLParam(r, "n"), 0)
-	c, err := s.st.CatalogByID(r.Context(), id)
-	if err != nil || c == nil || n < 1 {
-		http.NotFound(w, r)
-		return
-	}
-	base := filepath.Join(s.dataDir, "catalogs", c.BrandCode, safeName(c.Name), fmt.Sprintf("%04d", n))
-	wb, err := os.ReadFile(base + ".words.json")
+	abs, err := assets.Abs(s.dataDir, rel)
 	if err != nil {
-		w.Write([]byte("")) // not OCR'd yet: nothing to overlay
-		return
-	}
-	var words []ocr.Word
-	if json.Unmarshal(wb, &words) != nil {
-		w.Write([]byte(""))
-		return
-	}
-	pw, ph := 1692, 2206
-	if f, err := os.Open(base + ".jpg"); err == nil {
-		if cfg, _, err := image.DecodeConfig(f); err == nil {
-			pw, ph = cfg.Width, cfg.Height
-		}
-		f.Close()
-	}
-	var b strings.Builder
-	b.WriteString(`<div class="textlayer" aria-hidden="false">`)
-	for _, wd := range words {
-		if wd.Conf < 30 || wd.W <= 0 || wd.H <= 0 {
-			continue
-		}
-		hp := 100 * float64(wd.H) / float64(ph)
-		// font size as a share of the container *width* (cqw): inline-size containment keeps the
-		// page's height (a size container collapses to 0 and stacks every page on the first)
-		fs := hp * 0.85 * float64(ph) / float64(pw)
-		fmt.Fprintf(&b, `<span style="left:%.2f%%;top:%.2f%%;width:%.2f%%;height:%.2f%%;font-size:%.2fcqw">%s</span>`,
-			100*float64(wd.X)/float64(pw), 100*float64(wd.Y)/float64(ph), 100*float64(wd.W)/float64(pw), hp, fs, html.EscapeString(wd.Text))
-	}
-	b.WriteString(`</div>`)
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("Cache-Control", "public, max-age=3600")
-	w.Write([]byte(b.String()))
-}
-
-func (s *Server) catalogThumb(w http.ResponseWriter, r *http.Request) {
-	id := atoi(chi.URLParam(r, "id"), 0)
-	c, err := s.st.CatalogByID(r.Context(), id)
-	if err != nil || c == nil {
 		http.NotFound(w, r)
 		return
 	}
-	path := filepath.Join(s.dataDir, "catalogs", c.BrandCode, safeName(c.Name), "thumb.jpg")
-	if _, err := os.Stat(path); err != nil {
-		http.Redirect(w, r, fmt.Sprintf("https://catalogs.myplumbingshowroom.com/%s/%s/files/thumb/1.jpg", c.BrandCode, strings.ReplaceAll(c.Name, " ", "%20")), http.StatusFound)
-		return
-	}
-	w.Header().Set("Cache-Control", "public, max-age=86400")
-	http.ServeFile(w, r, path)
+	httpx.ServeFileCached(w, r, abs)
 }
 
-func atoi(s string, def int) int {
-	if n, err := strconv.Atoi(s); err == nil {
-		return n
+func (s *Server) catalogSearch(w http.ResponseWriter, r *http.Request) {
+	q := strings.TrimSpace(r.URL.Query().Get("q"))
+	hits, err := s.st.SearchPages(r.Context(), q, 40)
+	if err != nil {
+		s.fail(w, r, err)
+		return
 	}
-	return def
+	s.html(w, r, 200, views.PageHits(s.page(r.Context(), r, "Catalog search"), q, hits))
 }
 
-func safeName(s string) string {
-	return strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
-			return r
-		default:
-			return '_'
-		}
-	}, s)
+// ---- files ----
+
+// fileRoots are the DATA_DIR folders /files and /img may serve. Everything else in DATA_DIR
+// (Postgres, price files, logs, masters) stays unreachable.
+var fileRoots = map[string]bool{"logos": true, "catalogs": true, "covers": true, "crops": true, "crops_hd": true, "webimg": true}
+
+func cleanRel(rel string) string {
+	rel = path.Clean("/" + strings.ReplaceAll(rel, "\\", "/"))[1:]
+	root, _, ok := strings.Cut(rel, "/")
+	if !ok || !fileRoots[root] {
+		return ""
+	}
+	switch strings.ToLower(path.Ext(rel)) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".svg":
+		return rel
+	}
+	return ""
 }
 
-// Run serves until ctx is cancelled.
-func Run(ctx context.Context, addr string, h http.Handler) error {
-	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 120 * time.Second}
-	go func() {
-		<-ctx.Done()
-		shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdown)
-	}()
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-		return err
-	}
-	return nil
-}
-
-// adminLogoUpload receives a brand mark pushed from a browser session (JSON {slug, mime, b64})
-// and stores it as the brand's logo. CORS is open because the pushing page is another origin.
-func (s *Server) adminLogoUpload(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Headers", "content-type")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-	var in struct {
-		Slug, Code, Mime, B64 string
-	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4<<20)).Decode(&in); err != nil || in.B64 == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	if in.Slug == "" && in.Code != "" {
-		in.Slug, _ = s.st.BrandSlugByCode(r.Context(), in.Code)
-	}
-	if in.Slug == "" {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	data, err := base64.StdEncoding.DecodeString(in.B64)
-	if err != nil || len(data) < 200 {
-		http.Error(w, "bad image", http.StatusBadRequest)
-		return
-	}
-	// no SVG: it is a script container when served as a file
-	ext := map[string]string{"image/gif": ".gif", "image/png": ".png", "image/webp": ".webp", "image/jpeg": ".jpg"}[in.Mime]
-	if ext == "" {
-		http.Error(w, "unsupported type", http.StatusBadRequest)
-		return
-	}
-	slug := store.Slugify(in.Slug)
-	dir := filepath.Join(s.dataDir, "logos")
-	_ = os.MkdirAll(dir, 0o755)
-	if err := os.WriteFile(filepath.Join(dir, slug+ext), data, 0o644); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for _, old := range []string{".gif", ".png", ".webp", ".jpg", ".svg"} {
-		if old != ext {
-			_ = os.Remove(filepath.Join(dir, slug+old))
-		}
-	}
-	if err := s.st.SetBrandLogoBySlug(r.Context(), slug, "/files/logos/"+slug+ext); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	w.Header().Set("Content-Type", "application/json")
-	_, _ = fmt.Fprintf(w, `{"ok":true,"path":"/files/logos/%s%s","bytes":%d}`, slug, ext, len(data))
-}
-
-func fileExists(p string) bool {
-	_, err := os.Stat(p)
-	return err == nil
-}
-
-// catalogCover serves a crisp 720px-wide rendition of the book's first page (derived once from
-// the full-resolution download and cached as cover.jpg); falls back to the flipbook thumbnail.
-func (s *Server) catalogCover(w http.ResponseWriter, r *http.Request) {
-	id := atoi(chi.URLParam(r, "id"), 0)
-	c, err := s.st.CatalogByID(r.Context(), id)
-	if err != nil || c == nil {
+func (s *Server) file(w http.ResponseWriter, r *http.Request) {
+	rel := cleanRel(strings.TrimPrefix(r.URL.Path, "/files/"))
+	if rel == "" {
 		http.NotFound(w, r)
 		return
 	}
-	dir := filepath.Join(s.dataDir, "catalogs", c.BrandCode, safeName(c.Name))
-	cover := filepath.Join(dir, "cover.jpg")
-	if !fileExists(cover) {
-		src := filepath.Join(dir, "0001.jpg")
-		if !fileExists(src) {
-			s.catalogThumb(w, r)
+	httpx.ServeFileCached(w, r, filepath.Join(s.dataDir, filepath.FromSlash(rel)))
+}
+
+// fileResized serves /img/{w}/{path}: an on-demand WebP rendition of a mutable file (covers,
+// catalog page renders, logos), cached on disk. Product pictures never come this way; they are
+// assets with a pre-built ladder.
+func (s *Server) fileResized(w http.ResponseWriter, r *http.Request) {
+	wd, err := strconv.Atoi(chi.URLParam(r, "w"))
+	if err != nil || !assets.Allowed(wd) {
+		http.NotFound(w, r)
+		return
+	}
+	rel := cleanRel(chi.URLParam(r, "*"))
+	if rel == "" {
+		http.NotFound(w, r)
+		return
+	}
+	out, err := s.render.file(rel, wd)
+	if err != nil {
+		if os.IsNotExist(err) {
+			http.NotFound(w, r)
 			return
 		}
-		if err := resizeJPEG(src, cover, 720); err != nil {
-			s.catalogThumb(w, r)
+		slog.Warn("img", "path", rel, "err", err)
+		http.Error(w, "image error", 500)
+		return
+	}
+	httpx.ServeFileCached(w, r, out)
+}
+
+// asset serves /a/{short}/{w}.webp from the pre-built ladder. A miss in development builds
+// the ladder on the spot so a fresh checkout shows pictures; in production a miss is a 404
+// and Caddy normally serves these files directly from disk anyway.
+func (s *Server) asset(w http.ResponseWriter, r *http.Request) {
+	short, wd, ok := assets.ParseURL(r.URL.Path)
+	if !ok {
+		http.NotFound(w, r)
+		return
+	}
+	p := filepath.Join(s.dataDir, filepath.FromSlash(assets.RenditionPath(short, wd)))
+	if _, err := os.Stat(p); err != nil {
+		if !s.dev {
+			http.NotFound(w, r)
+			return
+		}
+		if err := s.render.asset(r.Context(), short); err != nil {
+			slog.Warn("asset build on demand", "hash", short, "err", err)
+			http.NotFound(w, r)
 			return
 		}
 	}
+	httpx.ServeFileImmutable(w, r, p)
+}
+
+func (s *Server) robots(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain")
+	fmt.Fprintf(w, "User-agent: *\nAllow: /\nDisallow: /suggest\nDisallow: /search\nSitemap: %s/sitemap.xml\n", s.publicURL)
+}
+
+func (s *Server) sitemap(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/xml")
 	w.Header().Set("Cache-Control", "public, max-age=86400")
-	http.ServeFile(w, r, cover)
-}
-
-func resizeJPEG(src, dst string, width int) error {
-	f, err := os.Open(src)
-	if err != nil {
-		return err
+	fmt.Fprint(w, `<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
+	for _, u := range []string{"/", "/shop/bathroom", "/shop/kitchen", "/shop/hardware", "/shop/appliances", "/brands", "/catalogs"} {
+		fmt.Fprintf(w, "<url><loc>%s%s</loc></url>", s.publicURL, u)
 	}
-	defer f.Close()
-	img, _, err := image.Decode(f)
-	if err != nil {
-		return err
-	}
-	b := img.Bounds()
-	if b.Dx() <= width {
-		width = b.Dx()
-	}
-	h := b.Dy() * width / b.Dx()
-	out := image.NewRGBA(image.Rect(0, 0, width, h))
-	draw.CatmullRom.Scale(out, out.Bounds(), img, b, draw.Over, nil)
-	g, err := os.CreateTemp(filepath.Dir(dst), ".cover-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(g.Name())
-	if err := jpeg.Encode(g, out, &jpeg.Options{Quality: 90}); err != nil {
-		g.Close()
-		return err
-	}
-	if err := g.Close(); err != nil {
-		return err
-	}
-	return os.Rename(g.Name(), dst)
-}
-
-// doc serves a spec/install sheet from the local copy when `specs sync` has fetched it,
-// otherwise redirects to the CDN origin (the per-site alias printed on the old pages answers 403).
-func (s *Server) doc(w http.ResponseWriter, r *http.Request) {
-	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
-	url, path, err := s.st.DocumentByID(r.Context(), id)
-	if err != nil || url == "" {
-		http.NotFound(w, r)
-		return
-	}
-	if path != "" {
-		full := filepath.Join(s.dataDir, filepath.FromSlash(path))
-		if _, err := os.Stat(full); err == nil {
-			w.Header().Set("Content-Type", "application/pdf")
-			w.Header().Set("Cache-Control", "public, max-age=604800")
-			http.ServeFile(w, r, full)
-			return
+	rows, err := s.st.Pool.Query(r.Context(), `SELECT family_id FROM search_docs WHERE grade <= 1 AND tier <> 2 ORDER BY family_id LIMIT 45000`)
+	if err == nil {
+		defer rows.Close()
+		for rows.Next() {
+			var id int64
+			if rows.Scan(&id) == nil {
+				fmt.Fprintf(w, "<url><loc>%s/p/%d</loc></url>", s.publicURL, id)
+			}
 		}
 	}
-	http.Redirect(w, r, specs.NormalizeURL(url), http.StatusFound)
+	fmt.Fprint(w, `</urlset>`)
 }

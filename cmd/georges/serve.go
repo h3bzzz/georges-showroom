@@ -1,32 +1,31 @@
 package main
 
 import (
-	"fmt"
-
 	"github.com/spf13/cobra"
 
-	"georges_/internal/web"
+	"georges/internal/httpx"
+	"georges/internal/store"
+	"georges/internal/web"
 )
 
 func serveCmd() *cobra.Command {
 	var addr string
-	cmd := &cobra.Command{
+	c := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the new storefront",
+		Short: "Run the storefront",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg := mustConfig()
-			st, err := openOrStartDB(cmd.Context(), cfg)
+			pool, err := openDB(cmd.Context(), 12)
 			if err != nil {
 				return err
 			}
-			defer st.Close()
-			if err := st.Migrate(cmd.Context()); err != nil {
-				return err
+			defer pool.Close()
+			if addr == "" {
+				addr = cfg.Addr
 			}
-			fmt.Printf("George's storefront on http://localhost%s\n", addr)
-			return web.Run(cmd.Context(), addr, web.New(st, cfg.DataDir))
+			srv := web.New(store.New(pool), cfg.DataDir, cfg.PublicURL, cfg.Dev())
+			return httpx.Serve(cmd.Context(), addr, srv)
 		},
 	}
-	cmd.Flags().StringVar(&addr, "addr", ":8080", "listen address")
-	return cmd
+	c.Flags().StringVar(&addr, "addr", "", "listen address (default $ADDR or :8080)")
+	return c
 }

@@ -1,293 +1,220 @@
 package views
 
-import "georges_/internal/store"
+import (
+	"georges/internal/store"
+	"georges/internal/taxonomy"
+)
 
-templ Shop(f store.BrowseFilter, r *store.BrowseResult, u ShopURL, rooms map[string]int, banner RoomTile, tiles []store.CategoryTile) {
-	@Layout(RoomName(f.Room)) {
-		<div id="shop">
-		if banner.CatalogID > 0 && f.Category == "" && f.Query == "" {
-			<div class="room-banner mb-6">
-				if banner.Image != "" {
-					<img src={ Img(banner.Image, 1280) } srcset={ HeroSrcset(banner.Image) } sizes="100vw" alt="" fetchpriority="high"/>
+// Shop is the browse page: room header, tiles, sidebar facets and the card grid.
+templ Shop(p Page, f store.Filter, r *store.Result, tiles []taxonomy.Tile, tileCards map[string]store.Card, brand *store.Brand) {
+	@Layout(p) {
+		@ShopBody(f, r, tiles, tileCards, brand)
+	}
+}
+
+templ ShopBody(f store.Filter, r *store.Result, tiles []taxonomy.Tile, tileCards map[string]store.Card, brand *store.Brand) {
+	{{ u := ShopURL{Filter: f} }}
+	<div id="shop">
+		if brand != nil {
+			<section class="brand-head">
+				if brand.LogoPath != nil {
+					<img src={ FileURL(*brand.LogoPath) } alt={ brand.Name } class="brand-logo"/>
 				} else {
-					<img src={ "/catalog/" + Itoa(banner.CatalogID) + "/page/" + Itoa(banner.Page) } alt="" fetchpriority="high"/>
+					<h1>{ brand.Name }</h1>
 				}
-				<div class="room-banner-text">
-					<div class="eyebrow" style="color:rgba(255,255,255,.75)">Shop the room</div>
-					<div class="font-display text-3xl md:text-4xl text-white" style="font-weight:500">{ banner.Room }</div>
-					if banner.Caption != "" {
-						<div class="text-xs mt-1" style="color:rgba(255,255,255,.7)">Imagery from { banner.Caption }</div>
+				<div class="muted">{ Thousands(brand.Families) } products
+					if brand.Website != nil {
+						· <a href={ templ.SafeURL("https://" + *brand.Website) } rel="noopener" target="_blank" hx-boost="false">{ *brand.Website }</a>
 					}
+					· <a href={ "/catalogs?brand=" + brand.Slug }>Catalogs</a>
 				</div>
-			</div>
-		}
-		if len(tiles) > 0 {
-			<div class={ "cat-tiles mb-8", templ.KV("three", len(tiles)%4 != 0 && len(tiles)%3 == 0) }>
+			</section>
+		} else if f.Category == "" && f.Query == "" && f.Brand == "" && len(tiles) > 0 {
+			<section class="tiles">
 				for _, t := range tiles {
-					<a href={ templ.SafeURL(u.Category(t.Name)) } class="cat-tile">
-						<div class="cat-tile-img">
-							if t.Cover.Path != "" {
-								<img src={ Img("/files/" + t.Cover.Path, 640) } srcset={ CardSrcset("/files/" + t.Cover.Path) } sizes={ CardSizes } alt="" loading="lazy" decoding="async"/>
+					<a class="tile" href={ u.Category(t.Name) }>
+						<div class="tile-img" { Placeholder(tileLQIP(tileCards, t.Name))... }>
+							if c, ok := tileCards[t.Name]; ok && c.Hash != nil {
+								<img { CardImg(*c.Hash, deref(c.W), deref(c.H))... } alt=""/>
 							}
 						</div>
-						<div class="cat-tile-label"><span>{ t.Name }</span></div>
+						<span>{ t.Name }</span>
 					</a>
 				}
-			</div>
+			</section>
 		}
-		<div class="flex items-end justify-between gap-4 mb-5 flex-wrap">
+		<div class="shop-head">
 			<div>
-				<div class="eyebrow">Shop</div>
-				<h1 class="font-display text-3xl md:text-4xl" style="font-weight:500">
-					if f.Category != "" {
-						{ f.Category }
-					} else if f.Query != "" {
-						“{ f.Query }”
+				<div class="eyebrow">
+					if f.Room != "" {
+						{ taxonomy.RoomName(f.Room) }
 					} else {
-						{ RoomName(f.Room) }
+						Shop
+					}
+				</div>
+				<h1 class="h1">
+					if f.Query != "" {
+						Results for “{ f.Query }”
+					} else if f.Category != "" {
+						{ f.Category }
+					} else if brand != nil {
+						{ brand.Name }
+					} else if f.Room != "" {
+						{ taxonomy.RoomName(f.Room) }
+					} else {
+						All products
 					}
 				</h1>
+				<div class="muted small">{ Thousands(r.Total) } { Plural(r.Total, "product", "products") }
+					if r.Took > 0 {
+						<span class="dim"> · { r.Took.Round(1000000).String() }</span>
+					}
+				</div>
 			</div>
-			<nav class="flex gap-1 text-sm" aria-label="Rooms">
-				for _, rm := range store.Rooms {
-					<a href={ templ.SafeURL("/shop/" + rm.Slug) } class={ "rounded-full px-3 py-1.5", templ.KV("bg-white", f.Room != rm.Slug), templ.KV("text-white", f.Room == rm.Slug) } style={ roomChipStyle(f.Room == rm.Slug) }>{ rm.Name } <span class="num opacity-60">{ Itoa(rooms[rm.Slug]) }</span></a>
-				}
-			</nav>
+			<div class="sort">
+				<label>Sort
+					<select name="sort" hx-get={ u.Sort("") } hx-trigger="change" hx-vals="js:{sort: event.target.value}" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML" hx-push-url="true">
+						<option value="" selected?={ f.Sort == "" }>Featured</option>
+						<option value="price-asc" selected?={ f.Sort == "price-asc" }>Price: low to high</option>
+						<option value="price-desc" selected?={ f.Sort == "price-desc" }>Price: high to low</option>
+					</select>
+				</label>
+			</div>
 		</div>
-		<div class="grid grid-cols-1 lg:grid-cols-[250px_1fr] gap-8">
-			<aside id="filters" class="text-sm">
-				@Sidebar(f, r, u)
+		if chips := u.Active(); len(chips) > 0 {
+			<div class="chips">
+				for _, c := range chips {
+					<a class="chip" href={ c[1] }>{ c[0] } <span aria-hidden="true">×</span></a>
+				}
+				<a class="chip clear" href={ u.Clear() }>Clear all</a>
+			</div>
+		}
+		<div class="shop-grid">
+			<aside class="facets" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML show:none" hx-push-url="true">
+				<details class="facet" data-open>
+					<summary>Category</summary>
+					<ul>
+						for _, c := range r.Categories {
+							<li><a href={ u.Category(c.Value) } class={ templ.KV("on", f.Category == c.Value) }>{ c.Label } <span class="n">{ Thousands(c.Count) }</span></a></li>
+						}
+					</ul>
+				</details>
+				<details class="facet" data-open>
+					<summary>Finish</summary>
+					<ul class="tones">
+						for _, t := range r.Tones {
+							<li><a href={ u.Tone(t.Value) } class={ templ.KV("on", u.HasTone(t.Value)) }><i class="dot" { SwatchStyle(t.Value)... }></i>{ t.Label } <span class="n">{ Thousands(t.Count) }</span></a></li>
+						}
+					</ul>
+				</details>
+				<details class="facet" data-open?={ brand == nil }>
+					<summary>Brand</summary>
+					<ul>
+						for _, b := range r.Brands {
+							<li><a href={ u.Brand(b.Value) } class={ templ.KV("on", f.Brand == b.Value) }>{ b.Label } <span class="n">{ Thousands(b.Count) }</span></a></li>
+						}
+					</ul>
+				</details>
+				<details class="facet">
+					<summary>Parts &amp; rough-ins</summary>
+					<ul><li><a href={ u.Parts() } class={ templ.KV("on", f.ShowParts) }>Show parts</a></li></ul>
+				</details>
 			</aside>
 			<section>
-				@ShopResults(f, r, u)
+				if len(r.Cards) == 0 {
+					<div class="empty">
+						<h2>Nothing matches yet.</h2>
+						<p>Try fewer filters, another finish, or search by model number.</p>
+					</div>
+				} else {
+					<ul class="grid">
+						for i, c := range r.Cards {
+							@CardTile(c, i)
+						}
+					</ul>
+					@Pager(u, r)
+				}
 			</section>
 		</div>
-		</div>
-	}
-}
-
-func roomChipStyle(on bool) string {
-	if on {
-		return "background:var(--slate)"
-	}
-	return "border:1px solid var(--line);color:var(--ink)"
-}
-
-templ Sidebar(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
-	<details class="shop-filters" open>
-	<summary class="cursor-pointer font-semibold rounded-full bg-white px-4 py-2 inline-block mb-3" style="border:1px solid var(--line)">Filters</summary>
-	<div class="space-y-7" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML" hx-push-url="true">
-		@ActiveChips(f, u)
-		<div>
-			<h3 class="eyebrow mb-2">Category</h3>
-			<ul class="space-y-1">
-				for _, c := range r.Categories {
-					<li>
-						<a href={ templ.SafeURL(u.Category(c.Value)) } class={ "flex justify-between gap-2 py-0.5 hover:text-[color:var(--accent)]", templ.KV("font-semibold", c.On) }>
-							<span>{ c.Label }</span><span class="num" style="color:var(--nickel)">{ Itoa(c.Count) }</span>
-						</a>
-					</li>
-				}
-			</ul>
-		</div>
-		<div>
-			<h3 class="eyebrow mb-2">Price</h3>
-			<form method="get" action={ templ.SafeURL(u.ClearAll()) } class="flex items-center gap-2" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML" hx-push-url="true">
-				for _, h := range u.HiddenFields() {
-					<input type="hidden" name={ h[0] } value={ h[1] }/>
-				}
-				<label class="sr-only" for="min">Min</label>
-				<input id="min" name="min" type="number" inputmode="numeric" placeholder={ "$" + Dollars(r.MinCents) } value={ Dollars(f.MinCents) } class="w-24 rounded border px-2 py-1 bg-white num" style="border-color:var(--line)"/>
-				<span style="color:var(--nickel)">–</span>
-				<label class="sr-only" for="max">Max</label>
-				<input id="max" name="max" type="number" inputmode="numeric" placeholder={ "$" + Dollars(r.MaxCents) } value={ Dollars(f.MaxCents) } class="w-24 rounded border px-2 py-1 bg-white num" style="border-color:var(--line)"/>
-				<button class="rounded px-3 py-1 text-white" style="background:var(--slate)">Go</button>
-			</form>
-			if f.MinCents > 0 || f.MaxCents > 0 {
-				<a href={ templ.SafeURL(u.ClearPrice()) } class="text-xs mt-1 inline-block" style="color:var(--accent)">Clear price</a>
-			}
-		</div>
-		<div>
-			<h3 class="eyebrow mb-2">Brand</h3>
-			<ul class="space-y-1 max-h-72 overflow-auto pr-1">
-				for _, b := range r.Brands {
-					<li>
-						<a href={ templ.SafeURL(u.ToggleBrand(b.Value)) } class="flex items-center gap-2 py-0.5 hover:text-[color:var(--accent)]">
-							<span class={ "inline-block w-3.5 h-3.5 rounded-sm border", templ.KV("bg-[color:var(--slate)]", b.On) } style="border-color:var(--nickel)"></span>
-							<span class="flex-1">{ b.Label }</span><span class="num" style="color:var(--nickel)">{ Itoa(b.Count) }</span>
-						</a>
-					</li>
-				}
-			</ul>
-		</div>
-		if len(r.Finishes) > 0 {
-			<div>
-				<h3 class="eyebrow mb-2">Finish</h3>
-				<ul class="space-y-1 max-h-72 overflow-auto pr-1">
-					for _, x := range r.Finishes {
-						<li>
-							<a href={ templ.SafeURL(u.ToggleFinish(x.Value)) } class="flex items-center gap-2 py-0.5 hover:text-[color:var(--accent)]">
-								<span class={ "inline-block w-3.5 h-3.5 rounded-sm border", templ.KV("bg-[color:var(--slate)]", x.On) } style="border-color:var(--nickel)"></span>
-								<span class="flex-1">{ x.Label }</span><span class="num" style="color:var(--nickel)">{ Itoa(x.Count) }</span>
-							</a>
-						</li>
-					}
-				</ul>
-			</div>
-		}
-		for _, sf := range r.Specs {
-			<div>
-				<h3 class="eyebrow mb-2">{ sf.Name }</h3>
-				<ul class="space-y-1">
-					for _, x := range sf.Values {
-						<li>
-							<a href={ templ.SafeURL(u.ToggleSpec(sf.Name, x.Value)) } class="flex items-center gap-2 py-0.5 hover:text-[color:var(--accent)]">
-								<span class={ "inline-block w-3.5 h-3.5 rounded-sm border", templ.KV("bg-[color:var(--slate)]", x.On) } style="border-color:var(--nickel)"></span>
-								<span class="flex-1">{ x.Label }</span><span class="num" style="color:var(--nickel)">{ Itoa(x.Count) }</span>
-							</a>
-						</li>
-					}
-				</ul>
-			</div>
-		}
-	</div>
-	</details>
-}
-
-templ ActiveChips(f store.BrowseFilter, u ShopURL) {
-	if f.Category != "" || len(f.Brands) > 0 || len(f.Finishes) > 0 || len(f.Specs) > 0 || f.MinCents > 0 || f.MaxCents > 0 || f.Query != "" {
-		<div class="flex flex-wrap gap-1.5">
-			if f.Query != "" {
-				<a href={ templ.SafeURL(u.ClearQuery()) } class="chip">“{ f.Query }” ×</a>
-			}
-			if f.Category != "" {
-				<a href={ templ.SafeURL(u.Category(f.Category)) } class="chip">{ f.Category } ×</a>
-			}
-			for _, b := range f.Brands {
-				<a href={ templ.SafeURL(u.ToggleBrand(b)) } class="chip">{ b } ×</a>
-			}
-			for _, x := range f.Finishes {
-				<a href={ templ.SafeURL(u.ToggleFinish(x)) } class="chip">{ x } ×</a>
-			}
-			for k, vs := range f.Specs {
-				for _, x := range vs {
-					<a href={ templ.SafeURL(u.ToggleSpec(k, x)) } class="chip">{ k }: { x } ×</a>
-				}
-			}
-			if f.MinCents > 0 || f.MaxCents > 0 {
-				<a href={ templ.SafeURL(u.ClearPrice()) } class="chip">${ Dollars(f.MinCents) } – ${ Dollars(f.MaxCents) } ×</a>
-			}
-			<a href={ templ.SafeURL(u.ClearAll()) } class="text-xs self-center" style="color:var(--accent)">Clear all</a>
-		</div>
-	}
-}
-
-templ ShopResults(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
-	<div id="results">
-		<div class="flex items-center justify-between mb-4 text-sm">
-			<span style="color:var(--nickel)"><strong class="num" style="color:var(--ink)">{ Thousands(r.Total) }</strong> products
-				if r.Understood != "" {
-					<span class="ml-2">· { r.Understood }</span>
-				}
-				if r.FinishWidened {
-					<span class="ml-2">(incl. products whose finish isn't listed)</span>
-				}
-				if r.Widened {
-					<span class="ml-2">(nothing matched everything, showing any)</span>
-				}
-				if r.Corrected != "" {
-					<span class="ml-2">· showing results for <strong>“{ r.Corrected }”</strong> — <a class="hover:underline" style="color:var(--accent)" href={ templ.SafeURL(u.AsTyped(r.Original)) }>search instead for “{ r.Original }”</a></span>
-				}
-				if r.Total == 0 && f.Query != "" {
-					<span class="ml-2">— no products match; the header search also looks inside every catalog page</span>
-				}
-			</span>
-			<div class="flex items-center gap-2" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML show:#shop:top" hx-push-url="true">
-				<span style="color:var(--nickel)">Sort</span>
-				for _, s := range [][2]string{{"relevance", "Featured"}, {"price_asc", "Price ↑"}, {"price_desc", "Price ↓"}, {"name", "Name"}} {
-					<a href={ templ.SafeURL(u.Sort(s[0])) } class={ "rounded-full px-2.5 py-1", templ.KV("bg-white", f.Sort != s[0] && !(s[0] == "relevance" && f.Sort == "")), templ.KV("text-white", f.Sort == s[0] || (s[0] == "relevance" && f.Sort == "")) } style={ roomChipStyle(f.Sort == s[0] || (s[0] == "relevance" && f.Sort == "")) }>{ s[1] }</a>
-				}
-			</div>
-		</div>
-		if len(r.FinishNames) > 1 && len(f.Finishes) == 0 {
-			<div class="flex flex-wrap items-center gap-1.5 mb-4 text-xs" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML show:#shop:top" hx-push-url="true">
-				<span style="color:var(--nickel)">Just one finish:</span>
-				for i, n := range r.FinishNames {
-					if i < 8 {
-						<a href={ templ.SafeURL(u.ToggleFinish(n)) } class="chip">{ n }</a>
-					}
-				}
-			</div>
-		}
-		if r.Total == 0 {
-			<div class="rounded-xl bg-white p-10 text-center" style="border:1px solid var(--line)">
-				<div class="font-display text-2xl mb-2">Nothing here yet</div>
-				<p style="color:var(--nickel)">Try clearing a filter, or <a href={ templ.SafeURL(u.ClearAll()) } style="color:var(--accent)">start over</a>.</p>
-			</div>
-		} else {
-			<div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-				for _, fam := range r.Items {
-					@FamilyCard(fam)
-				}
-			</div>
-			@ShopPager(f, r, u)
-		}
 	</div>
 }
 
-templ FamilyCard(f store.FamilyRow) {
-	<a href={ templ.SafeURL("/product/" + I64(f.ID)) } class="group rounded-lg bg-white overflow-hidden flex flex-col" style="border:1px solid var(--line)">
-		<div class="card-img">
-			if f.Image != "" {
-				<img src={ Img(f.Image, 640) } srcset={ CardSrcset(f.Image) } sizes={ CardSizes } alt="" style={ ImgStyle(f.ImageW) } loading="lazy" decoding="async"/>
-			} else {
-				<div class="placeholder">
-					<img src="/static/icon-64.png" alt=""/>
-					<span>{ f.ProductType }</span>
+templ CardTile(c store.Card, i int) {
+	<li class="card">
+		<a href={ "/p/" + i64(c.FamilyID) }>
+			<div class="card-img" { Placeholder(c.LQIP)... }>
+				if c.Hash != nil {
+					<img { Eager(CardImg(*c.Hash, deref(c.W), deref(c.H)), i)... } alt={ c.Title }/>
+				} else {
+					<div class="noimg" aria-hidden="true"><svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="5" width="18" height="14" rx="2"></rect><circle cx="9" cy="10" r="1.6"></circle><path d="m21 16-5-5-8 8"></path></svg></div>
+				}
+			</div>
+			<div class="card-body">
+				<div class="eyebrow">{ c.Brand }</div>
+				<div class="card-title">{ Truncate(c.Title, 72) }</div>
+				<div class="card-meta">
+					if pr := Price(c.PriceCents); pr != "" {
+						<span class="price">{ pr }</span>
+					} else {
+						<span class="muted">Call for price</span>
+					}
+					if len(c.Tones) > 0 {
+						<span class="dots" aria-label="Finishes">
+							for _, t := range c.Tones {
+								<i class="dot" { SwatchStyle(t)... }></i>
+							}
+						</span>
+					}
 				</div>
-			}
-		</div>
-		<div class="p-3 text-sm flex-1 flex flex-col">
-			<div class="eyebrow">{ f.BrandName }</div>
-			<div class="font-medium leading-snug line-clamp-2 mt-0.5">{ f.Title }</div>
-			<div class="text-xs mt-1 num" style="color:var(--nickel)">{ f.FamilyKey }
-				if f.Finishes > 1 {
-					· { Itoa(f.Finishes) } finishes
-				}
 			</div>
-			switch {
-				case f.ImageMatch == "exact" && f.ImageFinish != "":
-					<div class="text-[0.7rem] mt-0.5" style="color:var(--nickel)">shown in { f.ImageFinish }</div>
-				case f.ImageMatch == "other":
-					<div class="text-[0.7rem] mt-0.5" style="color:var(--accent)">pictured in { store.ToneLabel(f.ImageTone) }
-						if f.ImageFinish != "" {
-							({ f.ImageFinish })
-						}
-					</div>
-				case f.ImageMatch == "" && f.ImageFinish != "":
-					<div class="text-[0.7rem] mt-0.5" style="color:var(--nickel)">shown in { f.ImageFinish }</div>
-			}
-			<div class="mt-auto pt-2">
-				<div class="font-semibold num">{ PriceRange(f.MinCents, f.MaxCents) }</div>
-				if f.ListMin > 0 && f.ListMin > f.MinCents {
-					<div class="text-xs num" style="color:var(--nickel)"><s>List { PriceRange(f.ListMin, f.ListMax) }</s> <span style="color:var(--accent)">Save { Itoa(SavePct(f.ListMin, f.MinCents)) }%</span></div>
-				}
-			</div>
-		</div>
-	</a>
+		</a>
+	</li>
 }
 
-templ ShopPager(f store.BrowseFilter, r *store.BrowseResult, u ShopURL) {
-	{{ pages := (r.Total + f.PerPage - 1) / f.PerPage }}
-	if pages > 1 {
-		<nav class="flex items-center justify-center gap-3 mt-8 text-sm" hx-boost="true" hx-target="#shop" hx-select="#shop" hx-swap="outerHTML show:#shop:top" hx-push-url="true">
-			if f.Page > 1 {
-				<a class="rounded-full border px-3 py-1 bg-white" style="border-color:var(--line)" href={ templ.SafeURL(u.Page(f.Page - 1)) }>‹ Prev</a>
+templ Pager(u ShopURL, r *store.Result) {
+	if r.Pages > 1 {
+		<nav class="pager" aria-label="Pages">
+			if r.Page > 1 {
+				<a href={ u.Page(r.Page - 1) } rel="prev">‹ Prev</a>
 			}
-			<span class="num">Page { Itoa(f.Page) } of { Itoa(pages) }</span>
-			if f.Page < pages {
-				<a class="rounded-full border px-3 py-1 bg-white" style="border-color:var(--line)" href={ templ.SafeURL(u.Page(f.Page + 1)) }>Next ›</a>
+			for _, n := range pageWindow(r.Page, r.Pages) {
+				if n == 0 {
+					<span class="gap">…</span>
+				} else if n == r.Page {
+					<span class="cur" aria-current="page">{ Itoa(n) }</span>
+				} else {
+					<a href={ u.Page(n) }>{ Itoa(n) }</a>
+				}
+			}
+			if r.Page < r.Pages {
+				<a href={ u.Page(r.Page + 1) } rel="next">Next ›</a>
 			}
 		</nav>
+	}
+}
+
+// Suggest is the typeahead dropdown partial.
+templ Suggest(items []store.Suggestion, q string) {
+	if len(items) > 0 {
+		<ul>
+			for _, s := range items {
+				<li role="option">
+					<a href={ s.URL } hx-boost="false">
+						if s.Kind == "family" {
+							<span class="s-img">
+								if s.Hash != nil {
+									<img src={ Thumb(*s.Hash) } alt="" width="40" height="40" loading="lazy"/>
+								}
+							</span>
+							<span class="s-text"><span>{ s.Label }</span><small>{ s.Sub }</small></span>
+						} else {
+							<span class="s-kind">{ s.Kind }</span>
+							<span class="s-text"><span>{ s.Label }</span><small>{ s.Sub }</small></span>
+						}
+					</a>
+				</li>
+			}
+			<li class="s-all"><a href={ "/search?q=" + q } hx-boost="false">See all results for “{ q }”</a></li>
+		</ul>
 	}
 }

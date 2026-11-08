@@ -1,0 +1,170 @@
+package views
+
+import "georges/internal/store"
+
+templ Product(p Page, f *store.Family, related []store.Card) {
+	@Layout(p) {
+		{{ photos, drawings := splitMedia(f.Media) }}
+		<nav class="crumbs" aria-label="Breadcrumb">
+			<a href="/">Home</a>
+			if f.Room != nil {
+				<a href={ "/shop/" + *f.Room }>{ roomName(*f.Room) }</a>
+			}
+			if f.Category != nil {
+				<a href={ "/shop?category=" + *f.Category }>{ *f.Category }</a>
+			}
+			<a href={ "/brand/" + f.Brand.Slug }>{ f.Brand.Name }</a>
+		</nav>
+		<article class="pdp">
+			<section class="gallery" id="gallery">
+				<div class="stage">
+					if len(photos) > 0 {
+						<a href={ Full(photos[0].Hash) } class="stage-img" id="stage" data-lightbox hx-boost="false" { Placeholder(photos[0].LQIP)... }>
+							<img { GalleryImg(photos[0].Hash, photos[0].W, photos[0].H, true)... } alt={ f.Title } id="stage-img"/>
+						</a>
+					} else {
+						<div class="stage-img noimg"><span>Photo coming soon</span></div>
+					}
+					<div class="shown-in" id="shown-in" data-default={ mediaTitle(photos, 0) }>
+						if len(photos) > 0 {
+							{ mediaTitle(photos, 0) }
+						}
+					</div>
+				</div>
+				if len(photos) + len(drawings) > 1 {
+					<ul class="thumbs" role="tablist">
+						for i, m := range photos {
+							<li><button type="button" role="tab" aria-selected?={ i == 0 } data-hash={ m.Hash } data-src={ galleryURL(m.Hash) } data-srcset={ gallerySrcset(m.Hash, m.W) } data-full={ Full(m.Hash) } data-w={ Itoa(m.W) } data-h={ Itoa(m.H) } data-label={ mediaTitle(photos, i) } title={ mediaTitle(photos, i) }>
+								<img src={ Thumb(m.Hash) } alt="" width="64" height="64" loading="lazy"/>
+							</button></li>
+						}
+						for _, m := range drawings {
+							<li class="is-drawing"><button type="button" role="tab" data-hash={ m.Hash } data-src={ galleryURL(m.Hash) } data-srcset={ gallerySrcset(m.Hash, m.W) } data-full={ Full(m.Hash) } data-w={ Itoa(m.W) } data-h={ Itoa(m.H) } data-label="Dimensions" title="Dimensions">
+								<img src={ Thumb(m.Hash) } alt="" width="64" height="64" loading="lazy"/>
+							</button></li>
+						}
+					</ul>
+				}
+			</section>
+			<section class="pdp-info">
+				<div class="eyebrow"><a href={ "/brand/" + f.Brand.Slug }>{ f.Brand.Name }</a>
+					if f.Collection != nil {
+						· { *f.Collection }
+					}
+				</div>
+				<h1 class="h1">{ f.Title }</h1>
+				{{ lo, hi := priceRange(f.Items) }}
+				<div class="pdp-price">
+					if lo > 0 && hi > lo {
+						<span class="price">{ Money(lo) } – { Money(hi) }</span>
+					} else if lo > 0 {
+						<span class="price">{ Money(lo) }</span>
+					} else {
+						<span class="muted">Call or visit for pricing</span>
+					}
+					<span class="muted small">List price · trade pricing at the counter</span>
+				</div>
+				if len(f.Items) > 0 {
+					<div class="finishes">
+						<div class="label">
+							if len(f.Items) == 1 {
+								Model
+							} else {
+								{ Itoa(len(f.Items)) } finishes
+							}
+						</div>
+						{{ sel := selectedItem(f.Items, photos) }}
+						<ul class="finish-list" id="finishes">
+							for i, it := range f.Items {
+								<li>
+									<button type="button" class={ "finish", templ.KV("on", i == sel), templ.KV("has-photo", it.Hash != nil) } data-sku={ it.SKU } data-price={ Price(it.PriceCents) } data-finish={ finishLabel(it) } data-hash={ derefS(it.Hash) } data-w={ Itoa(deref(it.ImgW)) } data-h={ Itoa(deref(it.ImgH)) }>
+										if it.Hash != nil {
+											<img src={ Thumb(*it.Hash) } alt="" width="44" height="44" loading="lazy"/>
+										} else {
+											<i class="dot big" { SwatchStyle(toneOf(it.Finish))... }></i>
+										}
+										<span class="f-name">{ finishLabel(it) }</span>
+										<span class="f-sku">{ it.SKU }</span>
+										if pr := Price(it.PriceCents); pr != "" {
+											<span class="f-price">{ pr }</span>
+										}
+									</button>
+								</li>
+							}
+						</ul>
+						<p class="finish-note muted small" id="finish-note" hidden></p>
+					</div>
+				}
+				if f.Description != nil && *f.Description != "" {
+					<p class="desc">{ *f.Description }</p>
+				}
+				if bl := uniqueBullets(f.Bullets); len(bl) > 0 {
+					<ul class="bullets">
+						for _, b := range bl {
+							<li>{ b }</li>
+						}
+					</ul>
+				}
+				<div class="cta">
+					<a class="btn primary" href="tel:+16267925547">Ask the showroom · 626.792.5547</a>
+					if len(f.Documents) > 0 {
+						<a class="btn" href="#docs">Spec sheets</a>
+					}
+				</div>
+			</section>
+		</article>
+		<section class="pdp-specs">
+			<div>
+				<h2>Specifications</h2>
+				{{ rows := specRows(f) }}
+				if len(rows) == 0 {
+					<p class="muted">Specifications are on the manufacturer's sheet below.</p>
+				} else {
+					<table class="specs">
+						<tbody>
+							for _, r := range rows {
+								<tr><th>{ r[0] }</th><td>{ r[1] }</td></tr>
+							}
+						</tbody>
+					</table>
+				}
+			</div>
+			<div id="docs">
+				<h2>Documents</h2>
+				<ul class="docs">
+					for _, d := range f.Documents {
+						<li><a href={ "/doc/" + i64(d.ID) } hx-boost="false" target="_blank" rel="noopener">{ docLabel(d) }</a></li>
+					}
+					for _, pg := range f.Pages {
+						<li><a href={ "/catalog/" + Itoa(pg.CatalogID) + "/read?page=" + Itoa(pg.Page) }>{ pg.Title } · page { Itoa(pg.Page) }</a></li>
+					}
+					if !hasSpec(f) {
+						<li class="muted">The manufacturer's specification sheet is not on file here yet.
+							if f.Brand.Website != nil {
+								<a href={ templ.SafeURL("https://" + *f.Brand.Website) } target="_blank" rel="noopener" hx-boost="false">Find it on { f.Brand.Name }'s site</a> or
+							}
+							<a href={ templ.SafeURL(specRequest(f)) } hx-boost="false">ask us for it</a>; we answer the same day.
+						</li>
+					}
+				</ul>
+			</div>
+		</section>
+		if len(related) > 0 {
+			<section class="related">
+				<h2>
+					if f.Collection != nil {
+						More from { *f.Collection }
+					} else {
+						You may also like
+					}
+				</h2>
+				<ul class="grid">
+					for i, c := range related {
+						@CardTile(c, i+8)
+					}
+				</ul>
+			</section>
+		}
+		<dialog id="lightbox" class="lightbox"><button type="button" class="close" aria-label="Close">×</button><img alt=""/></dialog>
+	}
+}

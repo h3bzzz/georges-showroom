@@ -1,39 +1,53 @@
-// Package config loads settings from the environment (and .env when present).
+// Package config loads the process configuration from the environment (.env in development).
 package config
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 
 	"github.com/caarlos0/env/v11"
 	"github.com/joho/godotenv"
 )
 
 type Config struct {
+	// Env is "dev" or "prod". Dev renders missing renditions on demand and shows error detail.
+	Env string `env:"ENV" envDefault:"dev"`
+	// Addr is the HTTP listen address.
+	Addr string `env:"ADDR" envDefault:":8080"`
+	// DatabaseURL is the v2 store. The default keeps the embedded dev server and uses its own database.
+	DatabaseURL string `env:"DATABASE_URL" envDefault:"postgres://georges:georges@localhost:5432/georges2?sslmode=disable"`
+	// LegacyDatabaseURL is the v1 database the importer reads from.
+	LegacyDatabaseURL string `env:"LEGACY_DATABASE_URL" envDefault:"postgres://georges:georges@localhost:5432/georges?sslmode=disable"`
+	// DataDir holds the raw corpus (catalog pages, crops, vendor masters) and the derived assets.
+	DataDir string `env:"DATA_DIR" envDefault:"./data/raw"`
+	// PublicURL is the canonical origin used in sitemaps and Open Graph tags.
+	PublicURL string `env:"PUBLIC_URL" envDefault:"http://localhost:8080"`
+
 	SiteBaseURL string `env:"SITE_BASE_URL" envDefault:"https://www.georgesshowroom.com"`
 	SiteUser    string `env:"SITE_USER"`
 	SitePass    string `env:"SITE_PASS"`
-
-	FTPHost string `env:"FTP_HOST" envDefault:"ftp.myplumbingshowroom.com"`
-	FTPUser string `env:"FTP_USER"`
-	FTPPass string `env:"FTP_PASS"`
-
-	DatabaseURL string `env:"DATABASE_URL"`
-	DataDir     string `env:"DATA_DIR" envDefault:"./data/raw"`
-
-	ChromeBin        string `env:"CHROME_BIN" envDefault:"/usr/bin/google-chrome-stable"`
-	ChromeProfileDir string `env:"CHROME_PROFILE_DIR" envDefault:"./.chrome-profile"`
-	ChromeHeadless   bool   `env:"CHROME_HEADLESS" envDefault:"false"`
-	ChromeControlURL string `env:"CHROME_CONTROL_URL"` // e.g. http://127.0.0.1:9222 to attach to a running Chrome
-
-	BraveAPIKey string `env:"BRAVE_API_KEY"` // Brave Search API, used by `webimages` to find product pages on brand sites
+	FTPHost     string `env:"FTP_HOST" envDefault:"ftp.myplumbingshowroom.com"`
+	FTPUser     string `env:"FTP_USER"`
+	FTPPass     string `env:"FTP_PASS"`
 }
 
-// Load reads .env (if it exists) then the process environment.
+// Load reads .env (when present) and the environment.
 func Load() (*Config, error) {
-	_ = godotenv.Load() // missing .env is fine
+	_ = godotenv.Load()
 	var c Config
 	if err := env.Parse(&c); err != nil {
 		return nil, fmt.Errorf("config: %w", err)
 	}
+	abs, err := filepath.Abs(c.DataDir)
+	if err != nil {
+		return nil, err
+	}
+	c.DataDir = abs
+	if err := os.MkdirAll(c.DataDir, 0o755); err != nil {
+		return nil, err
+	}
 	return &c, nil
 }
+
+func (c *Config) Dev() bool { return c.Env != "prod" }

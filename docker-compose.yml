@@ -1,10 +1,11 @@
-# Production stack for a Hostinger VPS (Docker template). Deployed by .github/workflows/deploy.yml
-# through hostinger/deploy-on-vps, which writes the KEY=value pairs it is given as this file's .env.
+# Production stack for the Hostinger VPS. Caddy terminates TLS and serves the static image
+# ladder and assets straight from disk; the Go app only renders HTML.
 #
-#   DOMAIN             public hostname; Caddy fetches a Let's Encrypt cert for it (HTTP on the IP always works)
-#   POSTGRES_PASSWORD  database password (default only for a first boot)
+#   DOMAIN             public hostname (Caddy fetches the certificate)
+#   POSTGRES_PASSWORD  database password
 #   IMAGE_TAG          image tag to run (the workflow passes the commit SHA)
-#   DATA_PATH          host folder holding the rsync'd DATA_DIR (crops, webimg, covers, logos, …)
+#   DATA_PATH          host folder holding DATA_DIR (assets/, catalogs/, logos/, covers/, …)
+#   GATE_HASH          bcrypt hash of the preview password; leave empty to open the site
 services:
   db:
     image: postgres:16
@@ -12,15 +13,14 @@ services:
     environment:
       POSTGRES_USER: georges
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-georges}
-      POSTGRES_DB: georges
+      POSTGRES_DB: georges2
+    command: ["postgres", "-c", "shared_buffers=512MB", "-c", "effective_cache_size=2GB", "-c", "work_mem=16MB", "-c", "max_connections=40"]
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      # loopback only: the workstation pipeline reaches it through `deploy/tunnel.sh`
-      # (ssh -L), never the public interface
       - "127.0.0.1:5432:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U georges -d georges"]
+      test: ["CMD-SHELL", "pg_isready -U georges -d georges2"]
       interval: 5s
       timeout: 3s
       retries: 30
@@ -32,10 +32,12 @@ services:
       db:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgres://georges:${POSTGRES_PASSWORD:-georges}@db:5432/georges?sslmode=disable
+      DATABASE_URL: postgres://georges:${POSTGRES_PASSWORD:-georges}@db:5432/georges2?sslmode=disable
       DATA_DIR: /data
+      ENV: prod
+      PUBLIC_URL: https://${DOMAIN:-localhost}
     volumes:
-      - ${DATA_PATH:-/srv/georges/data}:/data
+      - ${DATA_PATH:-/srv/georges/data}:/data:ro
     expose:
       - "8080"
 
@@ -46,9 +48,7 @@ services:
       - app
     environment:
       DOMAIN: ${DOMAIN:-localhost}
-      # bcrypt hash (caddy hash-password) of the gate password: the site is closed to the
-      # public until the imagery is signed off; every visitor logs in as "georges"
-      GATE_HASH: ${GATE_HASH}
+      GATE_HASH: ${GATE_HASH:-}
     configs:
       - source: caddyfile
         target: /etc/caddy/Caddyfile
@@ -59,24 +59,29 @@ services:
     volumes:
       - caddy_data:/data
       - caddy_config:/config
+      - ${DATA_PATH:-/srv/georges/data}/assets:/srv/assets:ro
 
-# Plain HTTP on the bare IP always works (demos, DNS not yet pointed); the named host gets a
-# Let's Encrypt certificate once its A record reaches this box.
 configs:
   caddyfile:
     content: |
-      (gate) {
-          basic_auth {
-              georges {$$GATE_HASH}
+      (site) {
+          encode zstd gzip
+          # product pictures: pre-built, content-addressed, immutable, straight from disk
+          handle_path /a/* {
+              root * /srv/assets
+              rewrite * /{http.regexp.a.1}/{http.regexp.a.2}/{http.regexp.a.3}/{http.regexp.a.4}
+              header Cache-Control "public, max-age=31536000, immutable"
+              file_server
           }
+          reverse_proxy app:8080
       }
       :80 {
-          import gate
-          reverse_proxy app:8080
+          @a path_regexp a ^/a/(([0-9a-f]{2})([0-9a-f]{2})[0-9a-f]{12})/([0-9]+\.webp)$
+          import site
       }
       {$$DOMAIN} {
-          import gate
-          reverse_proxy app:8080
+          @a path_regexp a ^/a/(([0-9a-f]{2})([0-9a-f]{2})[0-9a-f]{12})/([0-9]+\.webp)$
+          import site
       }
       www.{$$DOMAIN} {
           redir https://{$$DOMAIN}{uri} permanent
