@@ -11,6 +11,7 @@ index, storefront (home, shop, product, brands, catalogs, reader, typeahead), de
 - [ ] Finish renderings (user asked 2026-11-07): metal mask (BiRefNet) + per-finish transform learned from real pairs (same-treatment pairs reach 35 dB; cross-treatment needs re-lighting), always labelled "Rendered in X", replaced by the real photo when one lands; living-finish patina slider later.
 - [x] Photo→product matcher (2026-11-08): `internal/vision` ported (CLIP ViT-B/16 through hugot, `-tags ORT`, cgo), int8 look-alike index over every shown picture, `georges vision embed|match|similar`. SigLIP 2 swap still open.
 - [x] Chatbot (2026-11-08): `internal/chat`, Claude tool use (search_products, get_product, search_catalog_pages, list_brands, similar_products), SSE streaming to a drawer on every page, photo attach, trade mode via `/rep`. Needs `ANTHROPIC_API_KEY` in .env / the VPS secret. Test from the terminal: `georges chat "…"`.
+- [x] Spec facts (2026-11-08): `georges specs mine` reads flow rate, spout height/reach, centers, bowl/cut-out sizes, mounting, material, certifications and bullets out of fetched sheets (3.8k families). Re-run after each `specs fetch`.
 - [x] Display titles (2026-11-08): `georges titles build` synthesises from the spec sheet's Product Type line, facts, category noun, collection and SKU.
 - [ ] Cut-outs for crops with busy backgrounds (BiRefNet_lite / BEN2 ONNX, offline).
 - [ ] Super-resolution A/B (SPAN / Compact) for crops under 400 px; drawings rendered from PDFs at 300 DPI instead.
