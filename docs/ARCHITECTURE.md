@@ -12,6 +12,10 @@ v1 database (georges)        import legacy      v2 database (georges2)
   catalog_crops, product_images ───────────▶  assets (hash, measures, vision verdict, embedding)
   family_crops ────────────────────────────▶  asset_links (the evidence)
 
+feed load       ftp data/<BRAND>-<date>.xml (+EXT)  ─▶  feed_products (every SKU the site carries)
+feed apply      feed_products ─▶ new families/items, enrichment of existing ones (copy, facts, finishes)
+prices ingest   ftp a-georges.txt.zip ─▶ items.price_cents / list / cost / upc (price_source='pricefile')
+feed images     ftp images/<BRAND>/ ─▶ assets(source=feed) for families with no picture
 media pick      asset_links × assets × taxonomy  ─▶  family_media (card / gallery / drawing)
 assets build    every asset: trim, measure, LQIP, PDQ, WebP ladder  ─▶  data/raw/assets/…
 index build     families + items + family_media  ─▶  search_docs (one row per family)
@@ -56,5 +60,11 @@ bin/georges import legacy [--only brands,catalogs,families,items,documents,skus,
 bin/georges media pick
 bin/georges assets build [--shown] [--source vendor|catalog|spec] [--limit N]
 bin/georges index build
+bin/georges prices list | fetch | inspect | ingest     # Unilog FTP price file (FTP_USER/FTP_PASS in .env)
+bin/georges feed load | apply | images                 # Unilog XML data feed (mirror: data/raw/feed/mirror-xml.sh)
+bin/georges specs fetch --brand CODE | specs mine      # maker spec sheets → documents, facts
+bin/georges titles build                               # display titles for code-only / shared-heading families
+bin/georges vision embed | match IMAGE | similar ID    # CLIP look-alike index (build with -tags ORT)
+bin/georges chat [question]                            # the assistant from the terminal
 bin/georges serve [--addr :8080]      # air runs this
 ```
