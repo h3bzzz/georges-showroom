@@ -69,17 +69,28 @@ func TestParse(t *testing.T) {
 
 func TestSplitBySkeleton(t *testing.T) {
 	var g []feedRow
-	for _, design := range []string{"4900.30.3", "4900.30.4", "4900.20.3", "490.30-238", "4500.30.3", "4500.20.3", "3750.30.3", "1250.30.3", "9000.30.8", "3100.30.3", "2250.30.3"} {
+	// Ashley Norton: the finish is the FIRST token (AN, AR, WM…); option codes vary at the end
+	for _, design := range []string{"4900.30.3", "4900.30.4", "4900.20.3", "490.30-238", "4500.30.3", "4500.20.3", "3750.30.3", "1250.30.3", "9000.30.8", "3100.30.3", "2250.30.3", "4900.30.L.9.234", "4900.30.R.4"} {
 		for _, fin := range []string{"AN", "AR", "WM", "DB", "MW"} {
 			g = append(g, feedRow{sku: fin + "." + design, name: "Colonial Passage", finish: fin})
 		}
 	}
 	parts := splitBySkeleton(g)
-	if len(parts) != 11 {
-		t.Fatalf("want 11 designs, got %d", len(parts))
+	if len(parts) != 13 {
+		t.Fatalf("want 13 designs, got %d: %v", len(parts), keys(parts))
 	}
-	if len(parts["4900.30.3"]) != 5 {
-		t.Errorf("design should hold its 5 finishes: %v", parts)
+	if len(parts["4900.30.3"]) != 5 || len(parts["4900.30.L.9.234"]) != 5 {
+		t.Errorf("design should hold its 5 finishes: %v", keys(parts))
+	}
+	// Brizo-style: the finish is the LAST token
+	var b []feedRow
+	for _, design := range []string{"65306LF", "65305LF", "64053LF", "63053LF"} {
+		for _, fin := range []string{"PC", "BL", "PN", "GL"} {
+			b = append(b, feedRow{sku: design + "-" + fin, name: "Litze"})
+		}
+	}
+	if p := splitBySkeleton(b); len(p) != 4 || len(p["65306LF"]) != 4 {
+		t.Errorf("last-token finish: %v", keys(p))
 	}
 	// a group whose SKUs share no structure stays whole
 	var h []feedRow
@@ -89,6 +100,14 @@ func TestSplitBySkeleton(t *testing.T) {
 	if len(splitBySkeleton(h)) != 1 {
 		t.Error("unstructured group must not split")
 	}
+}
+
+func keys(m map[string][]feedRow) []string {
+	var out []string
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestRepresentative(t *testing.T) {

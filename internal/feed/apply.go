@@ -368,39 +368,61 @@ var reSKUTokens = regexp.MustCompile(`[.\-/ ]+`)
 // must fold the SKUs into clearly fewer skeletons (one design, several finishes) without
 // collapsing everything into one. Returns nil-equivalent (one part) when no split convinces.
 func splitBySkeleton(g []feedRow) map[string][]feedRow {
-	try := func(first bool) map[string][]feedRow {
+	type trial struct {
+		parts  map[string][]feedRow
+		tokens int     // distinct values of the removed token: a finish set is small
+		alpha  float64 // share of removed tokens made of letters only: finish codes, not model numbers
+	}
+	try := func(first bool) trial {
 		parts := map[string][]feedRow{}
+		removed := map[string]bool{}
 		for _, r := range g {
 			toks := reSKUTokens.Split(strings.ToUpper(strings.TrimSpace(r.sku)), -1)
-			var skel string
+			var skel, tok string
 			switch {
 			case len(toks) < 2:
 				skel = toks[0]
 			case first:
-				skel = strings.Join(toks[1:], ".")
+				skel, tok = strings.Join(toks[1:], "."), toks[0]
 			default:
-				skel = strings.Join(toks[:len(toks)-1], ".")
+				skel, tok = strings.Join(toks[:len(toks)-1], "."), toks[len(toks)-1]
 			}
 			parts[skel] = append(parts[skel], r)
+			if tok != "" {
+				removed[tok] = true
+			}
 		}
-		return parts
+		alpha := 0
+		for tok := range removed {
+			if strings.IndexFunc(tok, func(r rune) bool { return r >= '0' && r <= '9' }) < 0 {
+				alpha++
+			}
+		}
+		t := trial{parts: parts, tokens: len(removed)}
+		if len(removed) > 0 {
+			t.alpha = float64(alpha) / float64(len(removed))
+		}
+		return t
 	}
-	best := map[string][]feedRow(nil)
-	bestN := len(g) + 1
+	var best *trial
 	for _, first := range []bool{true, false} {
-		p := try(first)
-		n := len(p)
+		t := try(first)
+		n := len(t.parts)
 		avg := float64(len(g)) / float64(n)
-		// a real finish token yields 2–16 rows per design; one or two skeletons means the
-		// token was not the finish
-		if n >= 3 && avg >= 1.8 && avg <= 16 && n < bestN {
-			best, bestN = p, n
+		// the removed token must look like a finish code set (few values) and fold the group
+		// into designs of a few rows each, not into one or two heaps
+		if n < 3 || avg < 1.8 || avg > 24 || t.tokens > 40 {
+			continue
+		}
+		if best == nil || t.alpha > best.alpha+0.25 || t.alpha >= best.alpha-0.25 && (t.tokens < best.tokens || t.tokens == best.tokens && n > len(best.parts)) {
+			tt := t
+			best = &tt
 		}
 	}
 	if best == nil {
 		return map[string][]feedRow{"": g}
 	}
-	return best
+	return best.parts
 }
 
 // categoryMap turns Unilog category names into the site's leaves where they differ.
