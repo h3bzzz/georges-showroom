@@ -66,6 +66,21 @@ func feedCmd() *cobra.Command {
 	images.Flags().StringVar(&brand, "brand", "", "one brand code")
 	images.Flags().IntVar(&limit, "limit", 0, "stop after this many families")
 	images.Flags().BoolVar(&dry, "dry", false, "count only")
-	c.AddCommand(load, apply, images)
+	disc := &cobra.Command{
+		Use:   "discontinued CSV",
+		Short: "Flag items listed in Unilog's discontinuedProducts sheet (CSV export)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			n, flagged, err := feed.MarkDiscontinued(cmd.Context(), pool, args[0])
+			fmt.Printf("%d rows read, %d items flagged discontinued\n", n, flagged)
+			return err
+		},
+	}
+	c.AddCommand(load, apply, images, disc)
 	return c
 }

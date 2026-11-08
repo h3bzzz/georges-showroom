@@ -37,8 +37,8 @@ type Hit struct {
 func Load(ctx context.Context, pool *pgxpool.Pool) (*Index, error) {
 	rows, err := pool.Query(ctx, `
 		SELECT fm.family_id, a.id, a.embedding
-		FROM family_media fm JOIN assets a ON a.id=fm.asset_id
-		WHERE fm.role IN ('card','gallery') AND a.embedding IS NOT NULL AND NOT a.rejected
+		FROM family_media fm JOIN assets a ON a.id=fm.asset_id JOIN families f ON f.id=fm.family_id
+		WHERE fm.role IN ('card','gallery') AND a.embedding IS NOT NULL AND NOT a.rejected AND f.tier < 2
 		ORDER BY fm.family_id, (fm.role='card') DESC, fm.rank`)
 	if err != nil {
 		return nil, err
@@ -113,11 +113,27 @@ func (ix *Index) Search(q []float32, n int, exclude int64) []Hit {
 	for _, h := range best {
 		hits = append(hits, h)
 	}
-	sort.Slice(hits, func(i, j int) bool { return hits[i].Score > hits[j].Score })
-	if len(hits) > n {
-		hits = hits[:n]
+	sort.Slice(hits, func(i, j int) bool {
+		if hits[i].Score != hits[j].Score {
+			return hits[i].Score > hits[j].Score
+		}
+		return hits[i].FamilyID < hits[j].FamilyID
+	})
+	// one picture shared by many families (a vendor master reused across a series) is one
+	// look-alike, not ten
+	seenAsset := map[int64]bool{}
+	out := make([]Hit, 0, n)
+	for _, h := range hits {
+		if seenAsset[h.AssetID] {
+			continue
+		}
+		seenAsset[h.AssetID] = true
+		out = append(out, h)
+		if len(out) == n {
+			break
+		}
 	}
-	return hits
+	return out
 }
 
 // Similar finds the families that look like a family's card picture.
