@@ -106,7 +106,12 @@ templ Product(p Page, f *store.Family, related []store.Card) {
 					</ul>
 				}
 				<div class="cta">
-					<a class="btn primary" href="tel:+16267925547">Ask the showroom · 626.792.5547</a>
+					if p.Chat {
+						<button type="button" class="btn primary" data-chat-ask={ "Tell me about the " + f.Brand.Name + " " + f.Title + ": what it is, finishes, dimensions and anything comparable we carry." }>Ask about this product</button>
+						<a class="btn" href="tel:+16267925547">Call · 626.792.5547</a>
+					} else {
+						<a class="btn primary" href="tel:+16267925547">Ask the showroom · 626.792.5547</a>
+					}
 					if len(f.Documents) > 0 {
 						<a class="btn" href="#docs">Spec sheets</a>
 					}

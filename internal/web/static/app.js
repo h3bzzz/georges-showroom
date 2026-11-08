@@ -121,6 +121,8 @@
     document.getElementById("chat-close").addEventListener("click", () => open(false));
     document.getElementById("chat-reset").addEventListener("click", () => { history = []; save(); render(); input.focus(); });
     log.addEventListener("click", (e) => { const b = e.target.closest("[data-q]"); if (b) { input.value = b.dataset.q; form.requestSubmit(); } });
+    // "Ask about this product" buttons anywhere on the page open the drawer with a question
+    document.addEventListener("click", (e) => { const b = e.target.closest("[data-chat-ask]"); if (b) { open(true); input.value = b.dataset.chatAsk; form.requestSubmit(); } });
     input.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); form.requestSubmit(); } });
     input.addEventListener("input", () => { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; });
     file.addEventListener("change", () => {

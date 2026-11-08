@@ -18,6 +18,7 @@ Every push to `main` runs `.github/workflows/deploy.yml`: it builds the image, p
 3. GitHub repo → Settings → Secrets and variables → Actions:
    - secret `HOSTINGER_API_KEY`
    - secret `POSTGRES_PASSWORD` (anything long)
+   - secret `ANTHROPIC_API_KEY` (enables the showroom assistant; leave unset to hide it)
    - variable `HOSTINGER_VM_ID`
    - variable `DOMAIN` (e.g. `shop.georgesshowroom.com`)
 4. After the first workflow run, open the package at github.com/h3bzzz?tab=packages and set
@@ -25,7 +26,8 @@ Every push to `main` runs `.github/workflows/deploy.yml`: it builds the image, p
 5. Copy the data the storefront serves (everything but the embedded Postgres and the raw
    catalogs/webimg masters is optional, but simplest is the whole folder):
 
-       rsync -a --info=progress2 data/raw/{crops,crops_hd,logos,webimg,catalogs,specimg} \
+       # or: deploy/sync-data.sh images  (adds assets/, docs/ and tools/ — the ONNX runtime and CLIP model the assistant's photo matcher loads)
+       rsync -a --info=progress2 data/raw/{assets,crops,crops_hd,logos,webimg,catalogs,specimg,docs,tools} \
          root@VPS_IP:/srv/georges/data/
        ssh root@VPS_IP 'install -d -o 10001 -g 10001 /srv/georges/data/cache /srv/georges/data/covers'
 
