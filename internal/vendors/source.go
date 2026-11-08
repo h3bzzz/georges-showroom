@@ -40,8 +40,10 @@ func newSource(brand string) (source, error) {
 		return &chicagoSource{}, nil
 	case "SGM":
 		return &sigmaSource{}, nil
+	case "ROB":
+		return &mapSource{brand: "ROB", min: 8000}, nil
 	}
-	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK, CHI, SGM)", brand)
+	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK, CHI, SGM, ROB)", brand)
 }
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -276,4 +278,51 @@ func (s *sigmaSource) file(u, sku, _ string) string {
 		return n
 	}
 	return sku + ".jpg"
+}
+
+// ---- generic map source: webimg/<CODE>/_images.json keyed by our exact SKU ----------------
+
+type mapSource struct {
+	brand string
+	min   int
+	bySKU map[string]string
+}
+
+func (s *mapSource) init(_ context.Context, f *Fetcher) error {
+	b, err := os.ReadFile(filepath.Join(f.DataDir, "webimg", s.brand, "_images.json"))
+	if err != nil {
+		return err
+	}
+	var rows []ImageRow
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return err
+	}
+	s.bySKU = map[string]string{}
+	for _, r := range rows {
+		if r.SKU != "" && strings.HasPrefix(r.URL, "http") {
+			s.bySKU[strings.ToUpper(r.SKU)] = r.URL
+		}
+	}
+	return nil
+}
+func (s *mapSource) candidates(sku string) (string, []string) {
+	u := strings.ToUpper(strings.TrimSpace(sku))
+	if url, ok := s.bySKU[u]; ok {
+		return "", []string{url}
+	}
+	return "", nil
+}
+func (s *mapSource) valid(body []byte) bool { return len(body) > s.min }
+func (s *mapSource) file(u, sku, _ string) string {
+	n := baseName(u)
+	if i := strings.IndexByte(n, '?'); i >= 0 {
+		n = n[:i]
+	}
+	if n == "" {
+		n = sku
+	}
+	if !strings.Contains(n, ".") {
+		n += ".png"
+	}
+	return n
 }

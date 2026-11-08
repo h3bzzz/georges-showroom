@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"golang.org/x/time/rate"
 )
 
@@ -26,7 +27,9 @@ type Crawler struct {
 	Brand   string
 	Limit   int
 	Client  *http.Client
-	lim     *rate.Limiter
+	// Pool is needed by crawls that look up our own SKUs (Robern's page-per-SKU site).
+	Pool *pgxpool.Pool
+	lim  *rate.Limiter
 }
 
 // ImageRow is one picture the crawl found.
@@ -64,8 +67,10 @@ func (c *Crawler) Run(ctx context.Context) (int, error) {
 		return c.chicago(ctx)
 	case "SGM":
 		return c.sigma(ctx)
+	case "ROB":
+		return c.robern(ctx)
 	}
-	return 0, fmt.Errorf("no crawler for %s (have ETK, CHI, SGM)", c.Brand)
+	return 0, fmt.Errorf("no crawler for %s (have ETK, CHI, SGM, ROB)", c.Brand)
 }
 
 func (c *Crawler) get(ctx context.Context, u string) ([]byte, int, error) {
@@ -384,5 +389,107 @@ func (c *Crawler) sigma(ctx context.Context) (int, error) {
 	}
 	n, err := c.mergeMap("_images.json", rows)
 	slog.Info("sigma crawl done", "visited", visited, "misses", misses, "map_rows", n)
+	return n, err
+}
+
+// ---- Robern (a Kohler company): product page → Kohler Scene7 asset ------------------------
+// Pictures live on s7d4.scene7.com/is/image/KIG/<Series>_<SKU>; the series is only on the
+// product page, which sits under one of a few category slugs (the site redirects to the
+// canonical one). Our own Robern SKUs drive the crawl; the price book's trailing "O" is a 0.
+
+var (
+	robSKU    = regexp.MustCompile(`^[A-Z0-9][A-Z0-9.-]{3,24}$`)
+	robSlugs  = []string{"medicine-cabinets", "mirrors", "lighting", "vanities", "linen-cabinets", "accessories"}
+	robHero   = regexp.MustCompile(`https://s7d4\.scene7\.com/is/image/KIG/([A-Za-z0-9_.-]+)\?[^"]*"\s+alt="3/4 view of product"`)
+	robAsset  = regexp.MustCompile(`https://s7d4\.scene7\.com/is/image/KIG/([A-Za-z0-9_.-]+)`)
+	robNotFnd = "page:miss:"
+)
+
+func (c *Crawler) robern(ctx context.Context) (int, error) {
+	if c.Pool == nil {
+		return 0, fmt.Errorf("robern crawl needs the database")
+	}
+	rows, err := c.Pool.Query(ctx, `
+		SELECT DISTINCT i.sku FROM items i JOIN brands b ON b.id=i.brand_id JOIN families f ON f.id=i.family_id
+		WHERE b.code='ROB' AND f.tier < 2
+		  AND NOT EXISTS (SELECT 1 FROM asset_links al JOIN assets a ON a.id=al.asset_id WHERE al.item_id=i.id AND a.source='vendor')
+		ORDER BY i.sku`)
+	if err != nil {
+		return 0, err
+	}
+	var skus []string
+	for rows.Next() {
+		var s string
+		if rows.Scan(&s) == nil {
+			skus = append(skus, strings.ToUpper(strings.TrimSpace(s)))
+		}
+	}
+	rows.Close()
+	known := map[string]bool{}
+	var have []ImageRow
+	if b, err := os.ReadFile(filepath.Join(c.DataDir, "webimg", c.Brand, "_images.json")); err == nil {
+		_ = json.Unmarshal(b, &have)
+		for _, r := range have {
+			known[strings.ToUpper(r.SKU)] = true
+		}
+	}
+	slog.Info("robern crawl", "skus", len(skus), "known", len(known))
+	var out []ImageRow
+	visited, found := 0, 0
+	for _, sku := range skus {
+		if ctx.Err() != nil {
+			break
+		}
+		if !robSKU.MatchString(sku) || known[sku] {
+			continue
+		}
+		tries := []string{sku}
+		if fixed := strings.ReplaceAll(sku, "O", "0"); fixed != sku {
+			tries = append(tries, fixed)
+		}
+		asset := ""
+	tries:
+		for _, try := range tries {
+			for _, slug := range robSlugs {
+				body, status, err := c.get(ctx, "https://www.robern.com/products/"+slug+"/"+strings.ToLower(try))
+				visited++
+				if err != nil || status != 200 {
+					continue
+				}
+				if m := robHero.FindSubmatch(body); m != nil {
+					asset = string(m[1])
+				} else {
+					for _, m := range robAsset.FindAllSubmatch(body, -1) {
+						if strings.HasSuffix(strings.ToUpper(string(m[1])), "_"+try) {
+							asset = string(m[1])
+							break
+						}
+					}
+				}
+				if asset != "" {
+					break tries
+				}
+			}
+		}
+		if asset == "" {
+			// remembered as a miss (URL marker) so a rerun does not ask again
+			out = append(out, ImageRow{SKU: sku, URL: robNotFnd + sku})
+			continue
+		}
+		found++
+		out = append(out, ImageRow{SKU: sku, URL: "https://s7d4.scene7.com/is/image/KIG/" + asset + "?wid=2000&hei=2000&fmt=png-alpha"})
+		if found%50 == 0 {
+			slog.Info("robern crawl", "visited", visited, "found", found)
+			if _, err := c.mergeMap("_images.json", out); err != nil {
+				return 0, err
+			}
+			out = out[:0]
+		}
+		if c.Limit > 0 && found >= c.Limit {
+			break
+		}
+	}
+	n, err := c.mergeMap("_images.json", out)
+	slog.Info("robern crawl done", "visited", visited, "found", found, "map_rows", n)
 	return n, err
 }

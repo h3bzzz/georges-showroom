@@ -39,7 +39,12 @@ func vendorsCmd() *cobra.Command {
 		Use:   "crawl",
 		Short: "Build the SKU → picture map for a maker whose picture names cannot be derived (ETK via the Wagtail API, CHI via the sitemap)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			n, err := (&vendors.Crawler{DataDir: cfg.DataDir, Brand: cbrand, Limit: climit}).Run(cmd.Context())
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			n, err := (&vendors.Crawler{DataDir: cfg.DataDir, Brand: cbrand, Limit: climit, Pool: pool}).Run(cmd.Context())
 			fmt.Printf("%s: %d pictures in the map\n", cbrand, n)
 			return err
 		},
