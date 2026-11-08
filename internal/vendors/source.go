@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -34,8 +36,10 @@ func newSource(brand string) (source, error) {
 		return &watermarkSource{}, nil
 	case "ETK":
 		return &emtekSource{}, nil
+	case "CHI":
+		return &chicagoSource{}, nil
 	}
-	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK)", brand)
+	return nil, fmt.Errorf("no per-finish image source for %s (have CAL, BAL, WMK, ETK, CHI)", brand)
 }
 
 func sum(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
@@ -171,4 +175,58 @@ func baseName(u string) string {
 		u = u[i+1:]
 	}
 	return u
+}
+
+// ---- Chicago Faucets (map built by `vendors crawl --brand CHI`) ---------------------------
+// Pictures are keyed by the exact SKU on the product page; a SKU's finish is its trailing
+// code (CP, ABCP, …) and a sibling finish shares the component picture when its own is
+// missing, so the SKU without its finish is the fallback key.
+
+type chicagoSource struct{ bySKU map[string]string }
+
+var chiCode = regexp.MustCompile(`(ABCP|ABRBF|ABRCF|RCF|ABRRCF|XKCP|XKCBCP|CP|PN|BN|SN|BB|OB|MB)$`)
+
+func (s *chicagoSource) init(_ context.Context, f *Fetcher) error {
+	b, err := os.ReadFile(filepath.Join(f.DataDir, "webimg", "CHI", "_images.json"))
+	if err != nil {
+		return err
+	}
+	var rows []ImageRow
+	if err := json.Unmarshal(b, &rows); err != nil {
+		return err
+	}
+	s.bySKU = map[string]string{}
+	for _, r := range rows {
+		if r.SKU != "" && r.URL != "" {
+			s.bySKU[strings.ToUpper(r.SKU)] = r.URL
+		}
+	}
+	return nil
+}
+func (s *chicagoSource) candidates(sku string) (string, []string) {
+	u := strings.ToUpper(strings.TrimSpace(sku))
+	code := ""
+	if m := chiCode.FindStringSubmatch(u); m != nil {
+		code = m[1]
+	}
+	if url, ok := s.bySKU[u]; ok {
+		return code, []string{url}
+	}
+	if code != "" {
+		if url, ok := s.bySKU[strings.TrimSuffix(u, code)]; ok {
+			return code, []string{url}
+		}
+		if url, ok := s.bySKU[strings.TrimSuffix(strings.TrimSuffix(u, code), "-")]; ok {
+			return code, []string{url}
+		}
+	}
+	return "", nil
+}
+func (s *chicagoSource) valid(body []byte) bool { return len(body) > 6000 }
+func (s *chicagoSource) file(u, sku, _ string) string {
+	n := baseName(u)
+	if n == "" {
+		n = sku + ".jpg"
+	}
+	return n
 }

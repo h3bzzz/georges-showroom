@@ -33,6 +33,20 @@ func vendorsCmd() *cobra.Command {
 	fetch.Flags().IntVar(&workers, "workers", 3, "parallel downloads")
 	fetch.Flags().BoolVar(&dry, "dry", false, "look but do not store")
 	fetch.MarkFlagRequired("brand")
-	c.AddCommand(fetch)
+	var cbrand string
+	var climit int
+	crawl := &cobra.Command{
+		Use:   "crawl",
+		Short: "Build the SKU → picture map for a maker whose picture names cannot be derived (ETK via the Wagtail API, CHI via the sitemap)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			n, err := (&vendors.Crawler{DataDir: cfg.DataDir, Brand: cbrand, Limit: climit}).Run(cmd.Context())
+			fmt.Printf("%s: %d pictures in the map\n", cbrand, n)
+			return err
+		},
+	}
+	crawl.Flags().StringVar(&cbrand, "brand", "", "Unilog brand code (required)")
+	crawl.Flags().IntVar(&climit, "limit", 0, "stop after this many pages")
+	crawl.MarkFlagRequired("brand")
+	c.AddCommand(fetch, crawl)
 	return c
 }
