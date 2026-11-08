@@ -81,6 +81,22 @@ func feedCmd() *cobra.Command {
 			return err
 		},
 	}
-	c.AddCommand(load, apply, images, disc)
+	fin := &cobra.Command{
+		Use:   "finishes",
+		Short: "Learn each brand's finish codes from feed rows that name their finish and fill the items the feed left blank",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			n, err := feed.ApplyFinishes(cmd.Context(), pool, brand, dry)
+			fmt.Printf("%d items given a finish\n", n)
+			return err
+		},
+	}
+	fin.Flags().StringVar(&brand, "brand", "", "one brand code")
+	fin.Flags().BoolVar(&dry, "dry", false, "print the learned codes, write nothing")
+	c.AddCommand(load, apply, images, disc, fin)
 	return c
 }
