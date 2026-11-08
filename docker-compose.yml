@@ -92,18 +92,17 @@ configs:
           # product pictures: pre-built, content-addressed, immutable, straight from disk
           handle_path /a/* {
               root * /srv/assets
-              rewrite * /{http.regexp.a.2}/{http.regexp.a.3}/{http.regexp.a.1}/{http.regexp.a.4}
+              # /a/<hash16>/<w>.webp → /<ab>/<cd>/<hash16>/<w>.webp ($$ keeps the $ from Compose)
+              uri path_regexp ^/(([0-9a-f]{2})([0-9a-f]{2})[0-9a-f]{12})/([0-9]+\.webp)$$ /$$2/$$3/$$1/$$4
               header Cache-Control "public, max-age=31536000, immutable"
               file_server
           }
           reverse_proxy app:8080
       }
       :80 {
-          @a path_regexp a ^/a/(([0-9a-f]{2})([0-9a-f]{2})[0-9a-f]{12})/([0-9]+\.webp)$
           import site
       }
       {$$DOMAIN} {
-          @a path_regexp a ^/a/(([0-9a-f]{2})([0-9a-f]{2})[0-9a-f]{12})/([0-9]+\.webp)$
           import site
       }
       www.{$$DOMAIN} {
