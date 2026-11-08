@@ -20,18 +20,36 @@ import (
 
 var reTok = regexp.MustCompile(`[.\-/ ]+`)
 
-// FinishTable is one brand's learned mapping.
+// FinishTable is one brand's learned mapping: "position:token" → finish name. A brand may
+// carry the finish in different places for different lines (Ashley Norton: first token on
+// door hardware, last on cabinet hardware), so tokens are accepted per position.
 type FinishTable struct {
-	Brand       string
-	Position    string // first | second | last
-	Codes       map[string]string
-	Consistency float64 // share of teaching rows whose token agreed with the majority finish
-	Taught      int
+	Brand  string
+	Codes  map[string]string // "first:WL", "second:112", "last:PC"
+	Taught int
 }
 
-// position returns the token at a position ("" when the SKU is too short).
+// positions: separated tokens first; then glued suffixes (Emtek "3051MELHUS26" → US26,
+// "7058BZEGMB" → MB), longest first so US10B wins over 0B.
+var positions = []string{"first", "second", "last", "suffix5", "suffix4", "suffix3", "suffix2"}
+
+// position returns the token at a position ("" when the SKU does not have one).
 func position(sku, pos string) string {
-	toks := reTok.Split(strings.ToUpper(strings.TrimSpace(sku)), -1)
+	u := strings.ToUpper(strings.TrimSpace(sku))
+	if strings.HasPrefix(pos, "suffix") {
+		n := int(pos[len(pos)-1] - '0')
+		if len(u) <= n+2 {
+			return ""
+		}
+		suf := u[len(u)-n:]
+		// a glued code starts with a letter and follows a digit or letter that is not part
+		// of it; purely numeric tails are sizes
+		if suf[0] < 'A' || suf[0] > 'Z' || isDigits(suf) {
+			return ""
+		}
+		return suf
+	}
+	toks := reTok.Split(u, -1)
 	switch {
 	case len(toks) < 2:
 		return ""
@@ -47,7 +65,24 @@ func position(sku, pos string) string {
 	}
 }
 
-// Learn builds the table for one brand from feed rows that name a finish.
+// Lookup finds the finish a SKU's tokens name, first position wins.
+func (t *FinishTable) Lookup(sku string) (code, finish string) {
+	for _, pos := range positions {
+		tok := position(sku, pos)
+		if tok == "" {
+			continue
+		}
+		if f, ok := t.Codes[pos+":"+tok]; ok {
+			return tok, f
+		}
+	}
+	return "", ""
+}
+
+// Learn builds the table for one brand from feed rows that name a finish. A token at a
+// position is accepted as a finish code when at least five rows carry it and nine in ten of
+// them agree on the finish; a function or size code fails that test because it appears with
+// every finish.
 func Learn(ctx context.Context, pool *pgxpool.Pool, brand string) (*FinishTable, error) {
 	rows, err := pool.Query(ctx, `SELECT sku, finish FROM feed_products WHERE brand_code=$1 AND finish IS NOT NULL AND finish <> ''`, brand)
 	if err != nil {
@@ -65,13 +100,12 @@ func Learn(ctx context.Context, pool *pgxpool.Pool, brand string) (*FinishTable,
 	if len(pairs) < 20 {
 		return nil, nil
 	}
-	var best *FinishTable
-	for _, pos := range []string{"first", "second", "last"} {
+	tbl := &FinishTable{Brand: brand, Codes: map[string]string{}, Taught: len(pairs)}
+	for _, pos := range positions {
 		counts := map[string]map[string]int{}
 		for _, p := range pairs {
 			t := position(p.sku, pos)
-			// a finish code is short and not purely numeric-with-length-of-a-size; Baldwin's
-			// three-digit codes are the exception, so digits are allowed up to 3
+			// a finish code is short; long digit runs are sizes or model numbers
 			if t == "" || len(t) > 6 || (len(t) > 3 && isDigits(t)) {
 				continue
 			}
@@ -80,8 +114,6 @@ func Learn(ctx context.Context, pool *pgxpool.Pool, brand string) (*FinishTable,
 			}
 			counts[t][p.finish]++
 		}
-		tbl := &FinishTable{Brand: brand, Position: pos, Codes: map[string]string{}}
-		agree, total := 0, 0
 		for tok, fin := range counts {
 			n := 0
 			bestF, bestN := "", 0
@@ -91,29 +123,19 @@ func Learn(ctx context.Context, pool *pgxpool.Pool, brand string) (*FinishTable,
 					bestF, bestN = f, c
 				}
 			}
-			if n < 3 {
-				continue
+			need := 5
+			if strings.HasPrefix(pos, "suffix") {
+				need = 25 // a glued tail must prove itself on more rows
 			}
-			total += n
-			agree += bestN
-			if float64(bestN) >= 0.8*float64(n) {
-				tbl.Codes[tok] = bestF
+			if n >= need && float64(bestN) >= 0.9*float64(n) {
+				tbl.Codes[pos+":"+tok] = bestF
 			}
-		}
-		if total == 0 {
-			continue
-		}
-		tbl.Consistency = float64(agree) / float64(total)
-		tbl.Taught = total
-		// a real finish position explains most rows consistently and uses a small vocabulary
-		if tbl.Consistency < 0.9 || total < len(pairs)/2 || len(tbl.Codes) > 400 {
-			continue
-		}
-		if best == nil || tbl.Consistency > best.Consistency || tbl.Consistency == best.Consistency && len(tbl.Codes) > len(best.Codes) {
-			best = tbl
 		}
 	}
-	return best, nil
+	if len(tbl.Codes) == 0 {
+		return nil, nil
+	}
+	return tbl, nil
 }
 
 func isDigits(s string) bool {
@@ -167,13 +189,12 @@ func ApplyFinishes(ctx context.Context, pool *pgxpool.Pool, brand string, dry bo
 				continue
 			}
 			blank++
-			t := position(sku, tbl.Position)
-			if f, ok := tbl.Codes[t]; ok {
+			if t, f := tbl.Lookup(sku); f != "" {
 				ups = append(ups, upd{id, t, f})
 			}
 		}
 		ir.Close()
-		slog.Info("finish codes", "brand", code, "position", tbl.Position, "codes", len(tbl.Codes), "consistency", fmt.Sprintf("%.2f", tbl.Consistency), "blank_items", blank, "fill", len(ups))
+		slog.Info("finish codes", "brand", code, "codes", len(tbl.Codes), "taught_by", tbl.Taught, "blank_items", blank, "fill", len(ups))
 		if dry {
 			if len(ups) > 0 {
 				keys := make([]string, 0, len(tbl.Codes))
@@ -185,15 +206,16 @@ func ApplyFinishes(ctx context.Context, pool *pgxpool.Pool, brand string, dry bo
 					keys = keys[:12]
 				}
 				for _, k := range keys {
-					fmt.Printf("  %s %-8s → %s\n", code, k, tbl.Codes[k])
+					fmt.Printf("  %s %-14s → %s\n", code, k, tbl.Codes[k])
 				}
 			}
 			filled += len(ups)
 			continue
 		}
 		batch := &pgx.Batch{}
-		for tok, f := range tbl.Codes {
-			batch.Queue(`INSERT INTO finish_codes (brand_code, code, finish) VALUES ($1,$2,$3) ON CONFLICT (brand_code, code) DO UPDATE SET finish=EXCLUDED.finish`, code, tok, f)
+		for key, f := range tbl.Codes {
+			tok := key[strings.IndexByte(key, ':')+1:]
+			batch.Queue(`INSERT INTO finish_codes (brand_code, code, finish) VALUES ($1,$2,$3) ON CONFLICT (brand_code, code) DO NOTHING`, code, tok, f)
 		}
 		for _, u := range ups {
 			batch.Queue(`UPDATE items SET finish=$2, finish_code=$3 WHERE id=$1`, u.id, u.finish, u.tok)

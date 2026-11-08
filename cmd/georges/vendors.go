@@ -52,6 +52,37 @@ func vendorsCmd() *cobra.Command {
 	crawl.Flags().StringVar(&cbrand, "brand", "", "Unilog brand code (required)")
 	crawl.Flags().IntVar(&climit, "limit", 0, "stop after this many pages")
 	crawl.MarkFlagRequired("brand")
-	c.AddCommand(fetch, crawl)
+	var ibrand, ipath string
+	var idry bool
+	var iminSide int
+	imp := &cobra.Command{
+		Use:   "import",
+		Short: "Import a manufacturer image pack (zip or folder from a dealer portal, files named by SKU or model) as vendor masters",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			st, err := (&vendors.Pack{Pool: pool, DataDir: cfg.DataDir, Brand: ibrand, Path: ipath, DryRun: idry, MinSide: iminSide}).Run(cmd.Context())
+			if st != nil {
+				fmt.Printf("%s: files %d · pictures matched %d (%d items) · too small %d · unmatched %d · skipped %d\n", ibrand, st.Files, st.Matched, st.Items, st.Small, st.Unmatched, st.Skipped)
+				for _, n := range st.UnmatchedNames {
+					fmt.Println("  unmatched:", n)
+				}
+				if !idry && st.Matched > 0 {
+					fmt.Println("next: georges assets build --source vendor && georges media pick && georges index build")
+				}
+			}
+			return err
+		},
+	}
+	imp.Flags().StringVar(&ibrand, "brand", "", "Unilog brand code (required)")
+	imp.Flags().StringVar(&ipath, "path", "", "zip file or folder (required)")
+	imp.Flags().BoolVar(&idry, "dry", false, "match and count, store nothing")
+	imp.Flags().IntVar(&iminSide, "min-side", 400, "reject pictures smaller than this on their short side")
+	imp.MarkFlagRequired("brand")
+	imp.MarkFlagRequired("path")
+	c.AddCommand(fetch, crawl, imp)
 	return c
 }
