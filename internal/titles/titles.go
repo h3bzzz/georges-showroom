@@ -18,13 +18,14 @@ import (
 
 // Input is what is known about one family.
 type Input struct {
-	Title      string
-	Category   string
-	Collection string
-	SKU        string
-	SpecText   string            // first page of the maker's spec sheet, when fetched
-	Facts      map[string]string // typed facts / site attributes
-	Shared     int               // families of the brand that print the same title
+	Title       string
+	Category    string
+	Collection  string
+	SKU         string
+	SpecText    string            // first page of the maker's spec sheet, when fetched
+	Description string            // the maker's copy, when the feed carries it
+	Facts       map[string]string // typed facts / site attributes
+	Shared      int               // families of the brand that print the same title
 }
 
 var (
@@ -47,8 +48,84 @@ func Codey(title, sku string) bool {
 	return reCode.MatchString(t) && reDigit.MatchString(t) && !strings.Contains(t, " ") || len(t) < 4
 }
 
+var (
+	reDims      = regexp.MustCompile(`^\s*\d+(\.\d+)?\s*[xX]\s*\d+`)
+	reVowel     = regexp.MustCompile(`[aeiouyAEIOUY]`)
+	reArtifact  = regexp.MustCompile(`andapos;|&apos;|&#39;`)
+	reClauseSep = regexp.MustCompile(`[.;:]\s|\s-\s|\s\|\s`)
+)
+
+// Abbreviated reports whether a title reads like a warehouse line ("36 X 18 X 34.5 Montlake
+// Profile Decorative Vanity Shaker Choc Cherry LH", "6315 2.5BS B/B MRTS LCK"): it opens with
+// dimensions, or a third of its words are short vowel-less codes.
+func Abbreviated(title string) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return false
+	}
+	if reDims.MatchString(t) {
+		return true
+	}
+	words := strings.Fields(t)
+	if len(words) < 3 {
+		return false
+	}
+	codes, readable := 0, 0
+	for _, w := range words {
+		w = strings.Trim(w, "().,/")
+		if w == "" {
+			continue
+		}
+		hasDigit := strings.IndexFunc(w, func(r rune) bool { return r >= '0' && r <= '9' }) >= 0
+		short := len(w) <= 3 && !reVowel.MatchString(w)
+		shouted := len(w) >= 4 && w == strings.ToUpper(w) && !reVowel.MatchString(w)
+		switch {
+		case hasDigit || short || shouted:
+			codes++
+		case len(w) >= 4 && reVowel.MatchString(w) && w != strings.ToUpper(w):
+			readable++
+		}
+	}
+	// a spec-heavy but readable name ("… Heat Pump, 650 cfm, 208 to 230 VAC") stands
+	return float64(codes) >= 0.35*float64(len(words)) && readable < 5
+}
+
+// descriptionTitle takes the first clause of the maker's copy as a title when it reads like a
+// product name: a handful of words, mixed case, no sentence filler.
+func descriptionTitle(desc string) string {
+	d := reArtifact.ReplaceAllString(strings.TrimSpace(desc), "'")
+	d = reSpaces.ReplaceAllString(d, " ")
+	if d == "" {
+		return ""
+	}
+	if loc := reClauseSep.FindStringIndex(d); loc != nil && loc[0] >= 12 {
+		d = d[:loc[0]]
+	}
+	d = strings.TrimRight(d, " .,;:-")
+	words := strings.Fields(d)
+	if len(words) < 2 || len(words) > 14 || len(d) > 90 {
+		return ""
+	}
+	lower := strings.ToLower(d)
+	for _, bad := range []string{"this ", "these ", "our ", "your ", "we ", "is a ", "are a ", "features", "designed to", "perfect for"} {
+		if strings.Contains(lower, bad) {
+			return ""
+		}
+	}
+	if !reVowel.MatchString(d) || d == strings.ToUpper(d) {
+		return ""
+	}
+	return d
+}
+
 // Synthesize returns a display title, or "" when the printed title should stand.
 func Synthesize(in Input) string {
+	// a warehouse-style line gives way to the maker's own sentence when the feed has one
+	if Abbreviated(in.Title) && !Codey(in.Title, in.SKU) {
+		if t := descriptionTitle(in.Description); t != "" && !strings.EqualFold(t, in.Title) {
+			return clip(t)
+		}
+	}
 	codey := Codey(in.Title, in.SKU)
 	// a title printed on four or more families of the brand is a page heading or a material
 	// line, not a product name, when it is short or shouted; a long descriptive title that
@@ -72,7 +149,7 @@ func Synthesize(in Input) string {
 		return clip(join(TitleCase(in.Collection), single, sku))
 	case single != "" && codey:
 		return clip(join(single, sku))
-	case single != "" && shared && !strings.Contains(strings.ToLower(in.Title), strings.ToLower(lastWord(single))):
+	case single != "" && shared && !genericCategory[in.Category] && !strings.Contains(strings.ToLower(in.Title), strings.ToLower(lastWord(single))):
 		return clip(join(TitleCase(in.Title), single, sku))
 	case shared && sku != "":
 		return clip(TitleCase(in.Title) + " · " + sku)
@@ -105,6 +182,10 @@ func clean(s string) string {
 	return s
 }
 
+// genericCategory names buckets that add nothing to a title ("Edward Privacy Door Hardware").
+var genericCategory = map[string]bool{"Door Hardware": true, "Faucet Parts": true, "Bathtub Parts": true, "Bath Accessories": true,
+	"Kitchen Accessories": true, "Drains": true, "Parts": true, "Shower Systems": true, "Hardware": true}
+
 func lastWord(s string) string {
 	f := strings.Fields(s)
 	if len(f) == 0 {
@@ -124,8 +205,8 @@ func join(parts ...string) string {
 }
 
 func clip(s string) string {
-	if len(s) > 80 {
-		s = s[:80]
+	if len(s) > 90 {
+		s = s[:90]
 		if i := strings.LastIndex(s, " "); i > 40 {
 			s = s[:i]
 		}
@@ -188,7 +269,7 @@ func Singular(cat string) string {
 func Build(ctx context.Context, pool *pgxpool.Pool, brandCode string, dry bool) (int, error) {
 	rows, err := pool.Query(ctx, `
 		WITH shared AS (SELECT brand_id, title, count(*) n FROM families WHERE tier <> 3 GROUP BY 1, 2)
-		SELECT f.id, COALESCE(f.title,''), COALESCE(f.category,''), COALESCE(f.collection,''), f.display_title,
+		SELECT f.id, COALESCE(f.title,''), COALESCE(f.category,''), COALESCE(f.collection,''), f.display_title, COALESCE(f.description,''),
 		       COALESCE((SELECT i.sku FROM items i WHERE i.family_id=f.id ORDER BY (i.price_cents IS NOT NULL) DESC, i.sku LIMIT 1), ''),
 		       COALESCE((SELECT left(d.text, 1500) FROM documents d WHERE d.family_id=f.id AND d.kind='spec' AND d.text IS NOT NULL ORDER BY d.id LIMIT 1), ''),
 		       f.facts, f.attributes, COALESCE(s.n, 1)
@@ -206,15 +287,15 @@ func Build(ctx context.Context, pool *pgxpool.Pool, brandCode string, dry bool) 
 	n := 0
 	for rows.Next() {
 		var id int64
-		var title, cat, coll, sku, spec string
+		var title, cat, coll, desc, sku, spec string
 		var cur *string
 		var facts, attrs map[string]any
 		var shared int
-		if err := rows.Scan(&id, &title, &cat, &coll, &cur, &sku, &spec, &facts, &attrs, &shared); err != nil {
+		if err := rows.Scan(&id, &title, &cat, &coll, &cur, &desc, &sku, &spec, &facts, &attrs, &shared); err != nil {
 			rows.Close()
 			return 0, err
 		}
-		in := Input{Title: title, Category: cat, Collection: coll, SKU: sku, SpecText: spec, Shared: shared, Facts: map[string]string{}}
+		in := Input{Title: title, Category: cat, Collection: coll, SKU: sku, SpecText: spec, Description: desc, Shared: shared, Facts: map[string]string{}}
 		for k, v := range attrs {
 			if s, ok := v.(string); ok {
 				in.Facts[k] = s

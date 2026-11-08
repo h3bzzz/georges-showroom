@@ -28,6 +28,19 @@ func TestSynthesize(t *testing.T) {
 			t.Errorf("Synthesize(%q) = %q, want %q", c.in.Title, got, c.want)
 		}
 	}
+	if !Abbreviated("36 X 18 X 34.5 Montlake Profile Decorative Vanity Shaker Choc Cherry LH") || !Abbreviated("6315 2.5BS B/B MRTS LCK") || Abbreviated("Bridge Faucet with Side Sprayer") || Abbreviated("Prep/Bar Pull-Down Faucet") {
+		t.Error("Abbreviated")
+	}
+	got := Synthesize(Input{Title: "36 X 18 X 34.5 Montlake Profile Decorative Vanity Shaker Choc Cherry LH", SKU: "41.123", Description: "Montlake View 36'' Vanity Single Basin With Shaker Doors, In Chocolate Cherry Finish. Left hand drawers."})
+	if got != "Montlake View 36'' Vanity Single Basin With Shaker Doors, In Chocolate Cherry Finish" {
+		t.Errorf("description title: %q", got)
+	}
+	if got := Synthesize(Input{Title: "18 X 8 X 26 Overjohn Shaker Cinn Cherry", SKU: "22-063", Description: "Traditional Overjohn: Shaker in Cinnamon Cherry"}); got != "Traditional Overjohn" {
+		t.Errorf("clause title: %q", got)
+	}
+	if got := Synthesize(Input{Title: "Greensource iSeries Water Source Heat Pump, 650 cfm, 208 to 230 VAC, 60 Hz, 1 ph -Phase", SKU: "SV018", Description: "BOSCH Water Source Heat Pump, Series: Greensource iSeries"}); got != "" {
+		t.Errorf("a readable title stands: %q", got)
+	}
 	if Singular("Kitchen Faucets") != "Kitchen Faucet" || Singular("Vanities") != "Vanity" || Singular("Deadbolts & Locks") != "Deadbolt" || Singular("Glass") != "Glass" {
 		t.Error("Singular")
 	}
