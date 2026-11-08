@@ -179,7 +179,7 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 				famID, best = id, n
 			}
 		}
-		lead := g[0]
+		lead := representative(g)
 		title := strings.TrimSpace(lead.name)
 		if title == "" {
 			title = lead.sku
@@ -277,6 +277,42 @@ func (a *Applier) applyBrand(ctx context.Context, code string, st *ApplyStats) e
 	return flush()
 }
 
+// representative builds the row whose classification fields are the most common non-empty
+// values across the group, so one SKU with a blank category cannot leave the family uncategorised.
+func representative(g []feedRow) feedRow {
+	r := g[0]
+	pick := func(get func(feedRow) string) string {
+		counts := map[string]int{}
+		for _, x := range g {
+			if v := strings.TrimSpace(get(x)); v != "" {
+				counts[v]++
+			}
+		}
+		best, n := "", 0
+		for v, c := range counts {
+			if c > n || c == n && v < best {
+				best, n = v, c
+			}
+		}
+		return best
+	}
+	r.category = pick(func(x feedRow) string { return x.category })
+	r.subCategory = pick(func(x feedRow) string { return x.subCategory })
+	r.grp = pick(func(x feedRow) string { return x.grp })
+	r.typ = pick(func(x feedRow) string { return x.typ })
+	r.collection = pick(func(x feedRow) string { return x.collection })
+	if r.name == "" {
+		r.name = pick(func(x feedRow) string { return x.name })
+	}
+	if r.desc == "" {
+		r.desc = pick(func(x feedRow) string { return x.desc })
+	}
+	if r.marketing == "" {
+		r.marketing = pick(func(x feedRow) string { return x.marketing })
+	}
+	return r
+}
+
 // categoryMap turns Unilog category names into the site's leaves where they differ.
 var categoryMap = map[string]string{
 	"Bathroom Accessories": "Bath Accessories", "Shower Accessories": "Bath Accessories", "Pulls": "Cabinet Pulls", "Appliance Pulls": "Cabinet Pulls",
@@ -292,6 +328,27 @@ var categoryMap = map[string]string{
 	"Pressure Balance Valves": "Rough-In Valves", "Diverters": "Volume Controls", "Diverter Valves": "Rough-In Valves", "Bathroom Vanities": "Vanities", "Vanity Tops": "Vanities",
 	"Range Hoods": "Range Hoods", "Wall Ovens": "Wall Ovens", "Refrigerators": "Refrigerators", "Freezers": "Refrigerators", "Wine Coolers": "Wine Storage", "Beverage Centers": "Wine Storage",
 	"Washers": "Laundry", "Dryers": "Laundry", "Coffee Makers": "Coffee Systems", "Hinges": "Hinges", "Door Stops": "Door Stops & Bumpers",
+	"Locks": "Deadbolts & Locks", "Door Locks And Handles": "Deadbolts & Locks", "Door Locks": "Deadbolts & Locks", "Deadbolts & Locks": "Deadbolts & Locks",
+	"Door Handles": "Levers", "Door Lever Sets": "Levers", "Door Knob Sets": "Knobs", "Entry Door Hardware": "Handle Sets", "Entrance Sets": "Handle Sets",
+	"Door Accessories": "Door Hardware", "Door Hardware Accessories": "Door Hardware", "Cabinet Hardware": "Cabinet Pulls", "Cabinet Knobs & Pulls": "Cabinet Pulls",
+	"Bath Hardware": "Bath Accessories", "Bathroom Hardware": "Bath Accessories", "Towel Bars & Rings": "Towel Bars & Rings", "Grab Bars": "Grab Bars",
+	"Medicine Cabinets": "Medicine Cabinets", "Bathroom Mirrors": "Mirrors", "Lighted Mirrors": "Mirrors", "Vanity Lights": "Lighting", "Lighting": "Lighting",
+	"Freestanding Tubs": "Bathtubs", "Drop-In Tubs": "Bathtubs", "Alcove Tubs": "Bathtubs", "Bathtubs": "Bathtubs", "Tub Drains": "Bathtub Parts", "Tub Wastes": "Bathtub Parts",
+	"Shower Drains": "Drains", "Linear Drains": "Drains", "Sink Drains": "Drains", "Drains": "Drains", "Lavatory Drains": "Drains", "Pop-Up Drains": "Drains",
+	"Body Sprays": "Body Sprays", "Slide Bars": "Hand Shower Slide Bars", "Shower Arms & Flanges": "Shower Arms", "Thermostatic Trims": "Thermostatic Valve Trim",
+	"Pressure Balance Trims": "Pressure Balance Valve Trims", "Volume Control Trims": "Volume Controls", "Rough-In Valves": "Rough-In Valves", "Rough In Valves": "Rough-In Valves",
+	"Toilets": "Toilets", "One Piece Toilets": "Toilets", "Two Piece Toilets": "Toilets", "Wall Hung Toilets": "Toilets", "Toilet Seats": "Toilets", "Bidets": "Bidets", "Urinals": "Urinals",
+	"Kitchen Sink Faucets": "Kitchen Faucets", "Pull Down Faucets": "Kitchen Faucets", "Pull-Down Kitchen Faucets": "Kitchen Faucets", "Pot Filler": "Pot Filler Faucets",
+	"Lavatory Faucets": "Bathroom Sink Faucets", "Widespread Faucets": "Bathroom Sink Faucets", "Centerset Faucets": "Bathroom Sink Faucets", "Single Hole Faucets": "Bathroom Sink Faucets",
+	"Wall Mount Faucets": "Bathroom Sink Faucets", "Vessel Faucets": "Bathroom Sink Faucets", "Lavatory Sinks": "Bathroom Sinks", "Farmhouse Sinks": "Kitchen Sinks", "Prep Sinks": "Kitchen Sinks",
+	"Ranges": "Ranges", "Cooktops": "Cooktops", "Dishwashers": "Dishwashers", "Microwaves": "Microwaves", "Ice Makers": "Refrigerators", "Warming Drawers": "Wall Ovens",
+	"Garbage Disposals": "Garbage Disposals", "Water Filtration": "Water Filtration", "Instant Hot Water": "Water Filtration", "Soap Dispensers": "Kitchen Accessories",
+	"Sink Grids": "Kitchen Accessories", "Cutting Boards": "Kitchen Accessories", "Colanders": "Kitchen Accessories", "Steam Generators": "Shower Systems", "Saunas": "Shower Systems",
+	"Smart Locks": "Deadbolts & Locks", "Door Bolts And Guards": "Deadbolts & Locks", "Door Pulls": "Door Hardware", "Door Lock Accessories": "Door Hardware", "Latches": "Door Hardware",
+	"House Numbers": "Door Hardware", "Door Knockers": "Door Hardware", "Pedestal Bathroom Sinks": "Bathroom Sinks", "Lavatory Consoles": "Bathroom Sinks", "Water Dispensers": "Water Filtration",
+	"Bar Sink Faucets": "Bar & Prep Faucets", "Steam Shower Heads": "Shower Systems", "Steam Shower Accessories": "Shower Systems", "Tub Options": "Bathtub Parts",
+	"Garbage Disposal Accessories": "Garbage Disposals", "Ovens": "Wall Ovens", "Ceiling Lights": "Lighting", "Pendant Lighting": "Lighting", "Outlets": "Lighting",
+	"Shut Off Valves": "Faucet Parts", "Risers And Accessories": "Faucet Parts",
 }
 
 var known = func() map[string]bool {
