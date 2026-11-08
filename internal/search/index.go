@@ -67,16 +67,21 @@ func (ix *Indexer) Run(ctx context.Context) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	// build into a fresh table and swap it in at the end, so the live site keeps serving the
+	// old index for the minutes this takes (a TRUNCATE in a transaction would block every page)
+	if _, err := ix.Pool.Exec(ctx, `DROP TABLE IF EXISTS search_docs_new`); err != nil {
+		return 0, err
+	}
+	if _, err := ix.Pool.Exec(ctx, `CREATE TABLE search_docs_new (LIKE search_docs INCLUDING DEFAULTS INCLUDING CONSTRAINTS)`); err != nil {
+		return 0, err
+	}
 	tx, err := ix.Pool.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, `TRUNCATE search_docs`); err != nil {
-		return 0, err
-	}
 	groupsOf := map[string][]string{}
-	n, err := tx.CopyFrom(ctx, pgx.Identifier{"search_docs"},
+	n, err := tx.CopyFrom(ctx, pgx.Identifier{"search_docs_new"},
 		[]string{"family_id", "brand_id", "brand", "brand_slug", "title", "collection", "room", "category", "groups", "tier", "grade", "tones", "finishes", "price_cents", "card_hash", "card_w", "card_h", "card_lqip", "skus", "blob", "tsv", "pop"},
 		pgx.CopyFromSlice(len(docs), func(i int) ([]any, error) {
 			d := docs[i]
@@ -127,7 +132,7 @@ func (ix *Indexer) Run(ctx context.Context) (int, error) {
 	// weighted text: title and SKUs matter most, then collection and brand, then category,
 	// then the facts a shopper might type (mounting, material, designer)
 	_, err = tx.Exec(ctx, `
-		UPDATE search_docs sd SET tsv =
+		UPDATE search_docs_new sd SET tsv =
 		    setweight(to_tsvector('english', sd.title), 'A')
 		 || setweight(to_tsvector('simple', array_to_string(sd.skus, ' ')), 'A')
 		 || setweight(to_tsvector('simple', coalesce(sd.collection,'') || ' ' || sd.brand), 'B')
@@ -140,21 +145,46 @@ func (ix *Indexer) Run(ctx context.Context) (int, error) {
 	}
 	// brand round-robin ranks (see migration 00004): two cards per brand per round
 	_, err = tx.Exec(ctx, `
-		UPDATE search_docs sd SET rr_room = x.rr_room, rr_cat = x.rr_cat FROM (
+		UPDATE search_docs_new sd SET rr_room = x.rr_room, rr_cat = x.rr_cat FROM (
 		  SELECT family_id,
 		    (row_number() OVER (PARTITION BY brand_id, room, tier, LEAST(grade, 2) ORDER BY pop DESC, family_id) - 1) / 2 AS rr_room,
 		    (row_number() OVER (PARTITION BY brand_id, room, category, tier, LEAST(grade, 2) ORDER BY pop DESC, family_id) - 1) / 2 AS rr_cat
-		  FROM search_docs) x WHERE x.family_id = sd.family_id`)
+		  FROM search_docs_new) x WHERE x.family_id = sd.family_id`)
 	if err != nil {
 		return 0, fmt.Errorf("round robin: %w", err)
 	}
 	// the precomputed browse orders (migration 00012): index walks instead of sorts
 	_, err = tx.Exec(ctx, `
-		UPDATE search_docs SET
+		UPDATE search_docs_new SET
 		  ord     = ((tier::bigint * 4 + CASE WHEN grade <= 1 THEN 0 ELSE grade END) * 1000000 + LEAST(rr_room, 999999)) * 100000 + LEAST(99999, GREATEST(0, 50000 - round(pop * 1000)))::bigint,
 		  ord_cat = ((tier::bigint * 4 + CASE WHEN grade <= 1 THEN 0 ELSE grade END) * 1000000 + LEAST(rr_cat, 999999)) * 100000 + LEAST(99999, GREATEST(0, 50000 - round(pop * 1000)))::bigint`)
 	if err != nil {
 		return 0, fmt.Errorf("ord: %w", err)
+	}
+	// indexes on the new table (same definitions as the live one, temporary names), then the
+	// swap: milliseconds of exclusive lock instead of minutes
+	for _, ddl := range []string{
+		`ALTER TABLE search_docs_new ADD PRIMARY KEY (family_id)`,
+		`CREATE INDEX ON search_docs_new USING gin (tsv)`,
+		`CREATE INDEX ON search_docs_new USING gin (blob gin_trgm_ops)`,
+		`CREATE INDEX ON search_docs_new (room, category, tier, grade)`,
+		`CREATE INDEX ON search_docs_new (brand_slug)`,
+		`CREATE INDEX ON search_docs_new USING gin (groups)`,
+		`CREATE INDEX ON search_docs_new USING gin (skus)`,
+		`CREATE INDEX ON search_docs_new (room, tier, rr_room)`,
+		`CREATE INDEX ON search_docs_new (category, grade)`,
+		`CREATE INDEX ON search_docs_new (ord, family_id)`,
+		`CREATE INDEX ON search_docs_new (room, ord, family_id)`,
+		`CREATE INDEX ON search_docs_new (category, ord_cat, family_id)`,
+		`CREATE INDEX ON search_docs_new (brand_slug, ord, family_id)`,
+		`CREATE INDEX ON search_docs_new (price_cents)`,
+		`ALTER TABLE search_docs_new ADD FOREIGN KEY (family_id) REFERENCES families(id) ON DELETE CASCADE`,
+		`DROP TABLE search_docs`,
+		`ALTER TABLE search_docs_new RENAME TO search_docs`,
+	} {
+		if _, err := tx.Exec(ctx, ddl); err != nil {
+			return 0, fmt.Errorf("%s: %w", ddl[:40], err)
+		}
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return 0, err

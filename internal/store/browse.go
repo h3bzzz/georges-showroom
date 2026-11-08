@@ -156,8 +156,14 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 			rel = append(rel, fmt.Sprintf(`(CASE WHEN EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(k) = %s) THEN 10 WHEN sd.blob LIKE %s THEN 3 ELSE 0 END)`, lit(in.SKU), lit("%"+strings.ToLower(search.NormSKU(in.SKU))+"%")))
 		}
 		if in.Text != "" {
-			// full text first, trigram as the fallback for misspellings and OCR'd titles
-			w.add("text", `(sd.tsv @@ websearch_to_tsquery('english', $1) OR sd.blob % $2)`, in.Text, strings.ToLower(in.Text))
+			// full text first, trigram as the fallback for misspellings and OCR'd titles; the
+			// similarity operator over 600k blobs is only worth it for a word long enough to
+			// have trigrams that mean something
+			if len(in.Text) >= 5 {
+				w.add("text", `(sd.tsv @@ websearch_to_tsquery('english', $1) OR sd.blob % $2)`, in.Text, strings.ToLower(in.Text))
+			} else {
+				w.add("text", `sd.tsv @@ websearch_to_tsquery('english', $1)`, in.Text)
+			}
 			rel = append(rel, fmt.Sprintf(`ts_rank_cd(sd.tsv, websearch_to_tsquery('english', %s)) * 4 + similarity(sd.blob, %s)`, lit(in.Text), lit(strings.ToLower(in.Text))))
 		}
 		if len(rel) > 0 {

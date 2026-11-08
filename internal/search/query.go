@@ -18,7 +18,9 @@ type Intent struct {
 	Text       string // remaining words
 }
 
-var reSKUish = regexp.MustCompile(`^[A-Za-z]*\d[A-Za-z0-9./-]*$`)
+// a model number: a few letters, an optional separator, then a digit and more ("K-50",
+// "65306LF", "2940-5223", "K50-100-45-PC")
+var reSKUish = regexp.MustCompile(`^[A-Za-z]{0,4}[-./]?\d[A-Za-z0-9./-]*$`)
 
 // BrandIndex resolves query words to brand slugs: lower-cased name and slug, spaces removed.
 type BrandIndex struct {
