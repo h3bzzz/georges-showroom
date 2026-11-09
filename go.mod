@@ -11,10 +11,12 @@ require (
 	github.com/gen2brain/webp v0.6.4
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/jackc/pgx/v5 v5.12.0
+	github.com/jlaffaye/ftp v0.2.4
 	github.com/joho/godotenv v1.5.1
 	github.com/knights-analytics/hugot v0.8.5
 	github.com/pressly/goose/v3 v3.29.0
 	github.com/spf13/cobra v1.10.2
+	github.com/xuri/excelize/v2 v2.11.1
 	golang.org/x/image v0.47.0
 	golang.org/x/sync v0.24.0
 	golang.org/x/time v0.16.0
@@ -42,7 +44,6 @@ require (
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
-	github.com/jlaffaye/ftp v0.2.4 // indirect
 	github.com/knights-analytics/ortgenai v0.3.4 // indirect
 	github.com/lib/pq v1.10.9 // indirect
 	github.com/mfridman/interpolate v0.0.2 // indirect
@@ -61,7 +62,6 @@ require (
 	github.com/tiendc/go-deepcopy v1.7.2 // indirect
 	github.com/xi2/xz v0.0.0-20171230120015-48954b6210f8 // indirect
 	github.com/xuri/efp v0.0.3-0.20260924042702-217b81952dec // indirect
-	github.com/xuri/excelize/v2 v2.11.1 // indirect
 	github.com/xuri/nfp v0.0.2-0.20250530014748-2ddeb826f9a9 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.47.0 // indirect
