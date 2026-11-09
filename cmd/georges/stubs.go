@@ -25,6 +25,23 @@ func mediaCmd() *cobra.Command {
 			return err
 		},
 	})
+	var brand string
+	link := &cobra.Command{
+		Use:   "link-catalog",
+		Short: "Link cropped catalog photographs to the SKUs printed nearest to them (families with no catalog or maker picture yet)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			pool, err := openDB(cmd.Context(), 4)
+			if err != nil {
+				return err
+			}
+			defer pool.Close()
+			n, err := media.LinkCatalog(cmd.Context(), pool, brand)
+			fmt.Printf("%d catalog links written; run `georges media pick` then `georges index build`\n", n)
+			return err
+		},
+	}
+	link.Flags().StringVar(&brand, "brand", "", "one brand code")
+	c.AddCommand(link)
 	return c
 }
 
