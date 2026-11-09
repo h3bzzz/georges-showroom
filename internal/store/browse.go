@@ -27,6 +27,8 @@ type Filter struct {
 	PerPage    int
 	ShowParts  bool
 	WithFacets bool
+	// looseSKU is the fallback pass of a model-number search: match the number anywhere.
+	looseSKU bool
 }
 
 // Card is one product tile.
@@ -152,7 +154,15 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 			// an unnest over the skus array could not
 			// both the printed form and the punctuation-free form, so a partial model number
 			// ("K-50") still reaches K50-100-45-PC and its siblings
-			w.add("sku", `(sd.blob LIKE $1 OR sd.blob LIKE $2)`, "%"+strings.ToLower(in.SKU)+"%", "%"+strings.ToLower(search.NormSKU(in.SKU))+"%")
+			if f.looseSKU {
+				w.add("sku", `(sd.blob LIKE $1 OR sd.blob LIKE $2)`, "%"+strings.ToLower(in.SKU)+"%", "%"+strings.ToLower(search.NormSKU(in.SKU))+"%")
+			} else {
+				// strict first: a model number is a prefix of a SKU ("K-50" → K50-101-ST-PC), not
+				// three characters somewhere inside another maker's part number. The trigram
+				// match narrows the rows; the prefix test runs only on those.
+				w.add("sku", `(sd.blob LIKE $1 OR sd.blob LIKE $2) AND EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(regexp_replace(k, '[^A-Za-z0-9]', '', 'g')) LIKE $3)`,
+					"%"+strings.ToLower(in.SKU)+"%", "%"+strings.ToLower(search.NormSKU(in.SKU))+"%", search.NormSKU(in.SKU)+"%")
+			}
 			rel = append(rel, fmt.Sprintf(`(CASE WHEN EXISTS (SELECT 1 FROM unnest(sd.skus) k WHERE upper(k) = %s) THEN 10 WHEN sd.blob LIKE %s THEN 3 ELSE 0 END)`, lit(in.SKU), lit("%"+strings.ToLower(search.NormSKU(in.SKU))+"%")))
 		}
 		if in.Text != "" {
@@ -242,6 +252,11 @@ func (s *Store) Browse(ctx context.Context, f Filter) (*Result, error) {
 	res.Total, err = s.total(ctx, base, bargs)
 	if err != nil {
 		return nil, err
+	}
+	if res.Total == 0 && res.Intent.SKU != "" && !f.looseSKU {
+		// nothing starts with that number: fall back to matching it anywhere
+		f.looseSKU = true
+		return s.Browse(ctx, f)
 	}
 	res.Pages = (res.Total + f.PerPage - 1) / f.PerPage
 	if f.WithFacets {

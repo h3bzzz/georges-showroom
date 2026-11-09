@@ -46,7 +46,8 @@ func New(st *store.Store, dataDir, publicURL string, dev bool, assistant *chat.S
 	s := &Server{st: st, dataDir: dataDir, publicURL: publicURL, dev: dev, chat: assistant, chatLimiter: newIPLimiter(20, 8)}
 	s.render = newRenditions(dataDir, st)
 	sub, _ := fs.Sub(staticFS, "static")
-	views.AssetVersion = httpx.Version(staticFS, "static/app.css")[:8]
+	// one version for both files: a script-only change must bust the cache as well
+	views.AssetVersion = httpx.Version(staticFS, "static/app.css")[:4] + httpx.Version(staticFS, "static/app.js")[:4]
 	r := httpx.Base(dev)
 	r.Handle("/static/*", http.StripPrefix("/static/", httpx.Static(sub)))
 	r.Get("/a/*", s.asset)

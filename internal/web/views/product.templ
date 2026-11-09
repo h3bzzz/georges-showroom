@@ -72,7 +72,7 @@ templ Product(p Page, f *store.Family, related []store.Card) {
 						<ul class="finish-list" id="finishes">
 							for i, it := range shown {
 								<li>
-									<button type="button" class={ "finish", templ.KV("on", i == sel), templ.KV("has-photo", it.Hash != nil) } data-sku={ it.SKU } data-price={ Price(it.PriceCents) } data-finish={ finishLabelN(it, len(f.Items)) } data-hash={ derefS(it.Hash) } data-w={ Itoa(deref(it.ImgW)) } data-h={ Itoa(deref(it.ImgH)) }>
+									<button type="button" class={ "finish", templ.KV("on", i == sel), templ.KV("has-photo", it.Hash != nil) } data-sku={ it.SKU } data-price={ Price(it.PriceCents) } data-finish={ finishLabelN(it, len(f.Items)) } data-hash={ derefS(it.Hash) } data-w={ Itoa(deref(it.ImgW)) } data-h={ Itoa(deref(it.ImgH)) } data-tone={ toneOf(it.Finish) } data-head={ finishHead(it.Finish) } data-treat={ finishTreat(it.Finish) }>
 										if it.Hash != nil {
 											<img src={ Thumb(*it.Hash) } alt="" width="44" height="44" loading="lazy"/>
 										} else {

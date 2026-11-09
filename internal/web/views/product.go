@@ -134,6 +134,22 @@ func itemsLabel(items []store.Item) string {
 	return Itoa(len(items)) + " models"
 }
 
+// finishHead is the tone a finish reads as ("nickel", "brass", "black" …), for the rendered
+// preview's palette; finishTreat is its surface (polished | satin | matte | antique | "").
+func finishHead(finish *string) string {
+	if finish == nil {
+		return ""
+	}
+	return taxonomy.ClassifyFinish(*finish).Head
+}
+
+func finishTreat(finish *string) string {
+	if finish == nil {
+		return ""
+	}
+	return taxonomy.ClassifyFinish(*finish).Treatment
+}
+
 func toneOf(finish *string) string {
 	if finish == nil {
 		return ""

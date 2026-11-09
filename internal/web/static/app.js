@@ -40,6 +40,8 @@
     };
     root.querySelectorAll(".thumbs [role=tab]").forEach((b) => b.addEventListener("click", () => show(b.dataset)));
     const note = root.querySelector("#finish-note");
+    // the photograph previews are rendered from: the first one on the page, at 960 px
+    const base0 = stage.classList.contains("noimg") ? null : { src: (img.currentSrc || img.src).replace(/\/(320|640|1600)\.webp$/, "/960.webp") };
     root.querySelectorAll(".finish").forEach((b) => b.addEventListener("click", () => {
       root.querySelectorAll(".finish").forEach((x) => x.classList.toggle("on", x === b));
       const h = b.dataset.hash;
@@ -48,8 +50,17 @@
         show({ hash: h, src: base + "960.webp", srcset: base + "320.webp 320w, " + base + "640.webp 640w, " + base + "960.webp 960w, " + base + "1600.webp 1600w",
                full: base + "1600.webp", w: b.dataset.w, h: b.dataset.h, label: "Shown in " + b.dataset.finish });
         if (note) note.hidden = true;
+      } else if (b.dataset.tone && base0) {
+        // no photograph in this finish: render a preview from the product photo and say so
+        renderFinish(base0.src, b.dataset).then((url) => {
+          if (!url) return;
+          img.srcset = ""; img.src = url; stage.href = url;
+          if (cap) cap.textContent = "Rendered preview in " + b.dataset.finish;
+          root.querySelectorAll(".thumbs [role=tab]").forEach((t) => t.setAttribute("aria-selected", "false"));
+          if (note) { note.textContent = "Preview rendered from the product photo — not a photograph of " + b.dataset.finish + ". Ask the showroom for a finish sample."; note.hidden = false; }
+        });
       } else if (note) {
-        note.textContent = "No photograph of " + b.dataset.finish + " on file yet — the picture shows " + ((cap && cap.textContent.trim()) || "another finish").replace(/^Shown in /, "").replace(/^(Manufacturer photo|From the catalog|From the spec sheet)$/, "another finish") + ".";
+        note.textContent = "No photograph of " + b.dataset.finish + " on file yet.";
         note.hidden = false;
       }
     }));
@@ -58,6 +69,68 @@
       stage.addEventListener("click", (e) => { e.preventDefault(); lb.querySelector("img").src = stage.href; lb.showModal(); });
       lb.addEventListener("click", () => lb.close());
     }
+  }
+  // Finish preview: the product photo re-toned for a finish the maker never photographed.
+  // Works on studio shots (object on white): the background is kept, the object's light and
+  // shade are kept, and its colour is remapped to the finish's metal with the contrast of its
+  // surface (polished keeps highlights, satin softens them, matte flattens them). It is a
+  // preview and is labelled as one; a real photograph always replaces it.
+  const METAL = {
+    chrome: [203, 208, 213], nickel: [196, 189, 176], silver: [200, 204, 208], steel: [186, 188, 190], stainless: [186, 188, 190], pewter: [150, 150, 148],
+    gold: [214, 176, 96], brass: [202, 166, 92], bronze: [96, 66, 46], copper: [192, 116, 80], black: [30, 30, 33], white: [244, 244, 241], graphite: [74, 76, 80], gunmetal: [74, 76, 80]
+  };
+  const GROUP = { silver: "chrome", gold: "gold", bronze: "bronze", black: "black", white: "white", copper: "copper" };
+  const cache = new Map();
+  function renderFinish(src, d) {
+    const key = src + "|" + d.head + "|" + d.tone + "|" + d.treat;
+    if (cache.has(key)) return Promise.resolve(cache.get(key));
+    return new Promise((resolve) => {
+      const im = new Image();
+      im.onload = () => {
+        try {
+          const w = Math.min(im.naturalWidth, 960), h = Math.round(im.naturalHeight * w / im.naturalWidth);
+          const c = document.createElement("canvas"); c.width = w; c.height = h;
+          const g = c.getContext("2d", { willReadFrequently: true });
+          g.fillStyle = "#fff"; g.fillRect(0, 0, w, h); g.drawImage(im, 0, 0, w, h);
+          const px = g.getImageData(0, 0, w, h), a = px.data;
+          const base = METAL[d.head] || METAL[GROUP[d.tone]] || METAL.chrome;
+          const dark = d.tone === "black", light = d.tone === "white";
+          const treat = d.treat || (dark || light ? "matte" : "polished");
+          // shade range and highlight strength by surface
+          const lo = treat === "matte" ? 0.62 : treat === "satin" || treat === "antique" ? 0.42 : 0.24;
+          const hi = treat === "matte" ? 1.06 : treat === "satin" || treat === "antique" ? 1.18 : 1.34;
+          const spec = treat === "polished" || treat === "unlacquered" ? 0.85 : treat === "satin" ? 0.35 : 0.08;
+          for (let i = 0; i < a.length; i += 4) {
+            const r = a[i], gg = a[i + 1], bb = a[i + 2];
+            const mn = Math.min(r, gg, bb);
+            // how much this pixel belongs to the object rather than the white backdrop
+            let k = (255 - mn - 10) / 34; k = k < 0 ? 0 : k > 1 ? 1 : k; k = k * k * (3 - 2 * k);
+            if (k === 0) continue;
+            const t = (0.2126 * r + 0.7152 * gg + 0.0722 * bb) / 255;
+            let o0, o1, o2;
+            if (dark) {
+              const range = treat === "matte" ? 46 : 110, v = (t - 0.45) * range;
+              o0 = base[0] + v; o1 = base[1] + v; o2 = base[2] + v;
+            } else if (light) {
+              const v = 0.80 + 0.20 * t;
+              o0 = base[0] * v; o1 = base[1] * v; o2 = base[2] * v;
+            } else {
+              const sh = lo + (hi - lo) * t;
+              o0 = base[0] * sh; o1 = base[1] * sh; o2 = base[2] * sh;
+            }
+            if (t > 0.82 && spec > 0) { const s2 = (t - 0.82) / 0.18 * spec; o0 += (255 - o0) * s2; o1 += (255 - o1) * s2; o2 += (255 - o2) * s2; }
+            a[i] = Math.max(0, Math.min(255, r + (o0 - r) * k));
+            a[i + 1] = Math.max(0, Math.min(255, gg + (o1 - gg) * k));
+            a[i + 2] = Math.max(0, Math.min(255, bb + (o2 - bb) * k));
+          }
+          g.putImageData(px, 0, 0);
+          const url = c.toDataURL("image/webp", 0.9);
+          cache.set(key, url); resolve(url);
+        } catch (e) { resolve(""); }
+      };
+      im.onerror = () => resolve("");
+      im.src = src;
+    });
   }
   // facets: open on wide screens, collapsed into chips on phones
   function wireFacets(root) {
